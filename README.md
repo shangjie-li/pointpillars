@@ -25,7 +25,7 @@ Implementation of PointPillars in PyTorch for KITTI 3D Object Detetcion
    # If there is `ERROR: Cannot uninstall 'certifi'.`, try:
    pip install spconv-cu102 --ignore-installed
    ```
- - Install pcdet library
+ - Compile external modules
    ```
    cd pointpillars
    python setup.py develop
@@ -55,23 +55,19 @@ Implementation of PointPillars in PyTorch for KITTI 3D Object Detetcion
    │   │   │   ├──calib & velodyne & label_2 & image_2 & planes
    │   │   │── testing
    │   │   │   ├──calib & velodyne & image_2
-   ├── pcdet
-   ├── tools
+   ├── layers
+   ├── utils
    ```
  - Generate the ground truth database and data infos by running the following command
    ```
    # This will create gt_database dir & 5 pkl files in pointpillars/data/kitti.
    cd pointpillars
-   python -m pcdet.datasets.kitti.kitti_dataset create_kitti_infos tools/cfgs/dataset_configs/kitti_dataset.yaml
+   python -m data.kitti_dataset create_kitti_infos data/kitti_dataset.yaml
    ```
 
 ## Demo
- - Run the demo with a pretrained model (e.g. [here](https://drive.google.com/file/d/1wMxWTpU1qUoY3DsCH31WJmvJxcjFXKlm/view?usp=sharing))
+ - Run the demo with a pretrained model (Download [pointpillar_7728.pth](https://drive.google.com/file/d/1wMxWTpU1qUoY3DsCH31WJmvJxcjFXKlm/view?usp=sharing) and save it in pointpillars/weights.)
    ```
-   cd pointpillars
-   python demo.py --cfg_file=path_to_your_config_file --ckpt=path_to_your_ckpt --data_path=path_to_your_data
-   
-   # For example
    python demo.py --cfg_file=data/pointpillar.yaml --ckpt=weights/pointpillar_7728.pth --data_path=data/kitti/training/velodyne/000008.bin
    ```
 
@@ -88,7 +84,7 @@ Implementation of PointPillars in PyTorch for KITTI 3D Object Detetcion
    cd pointpillars
    python test.py --cfg_file=data/pointpillar.yaml --batch_size=2 --ckpt=weights/pointpillar_7728.pth
    ```
- - The 3D detection performance on KITTI3D should be
+ - The 3D detection performance on KITTI should be
    | Class                | AP (R11) BEV              | AP (R11) 3D               |
    |:--------------------:|:-------------------------:|:-------------------------:|
    | Car (Iou=0.7)        | 89.6590, 87.1725, 84.3762 | 86.4617, 77.2839, 74.6530 |
