@@ -2,6 +2,9 @@
 
 Implementation of PointPillars in PyTorch for KITTI 3D Object Detetcion
 
+## Acknowledgement
+ - This repository references [open-mmlab](https://github.com/open-mmlab/OpenPCDet)'s work.
+
 ## Installation
  - Clone this repository
    ```
