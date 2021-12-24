@@ -10,7 +10,7 @@ from utils import model_nms_utils
 from utils.spconv_utils import find_all_spconv_keys
 
 
-class Detector3DTemplate(nn.Module):
+class PointPillar(nn.Module):
     def __init__(self, model_cfg, num_class, dataset):
         super().__init__()
         self.model_cfg = model_cfg
@@ -22,6 +22,7 @@ class Detector3DTemplate(nn.Module):
         self.module_topology = [
             'vfe', 'map_to_bev_module', 'backbone_2d', 'dense_head',
         ]
+        self.module_list = self.build_networks()
 
     @property
     def mode(self):
@@ -102,9 +103,6 @@ class Detector3DTemplate(nn.Module):
         )
         model_info_dict['module_list'].append(dense_head_module)
         return dense_head_module, model_info_dict
-
-    def forward(self, **kwargs):
-        raise NotImplementedError
 
     def post_processing(self, batch_dict):
         """
@@ -340,12 +338,6 @@ class Detector3DTemplate(nn.Module):
         logger.info('==> Done')
 
         return it, epoch
-
-
-class PointPillar(Detector3DTemplate):
-    def __init__(self, model_cfg, num_class, dataset):
-        super().__init__(model_cfg=model_cfg, num_class=num_class, dataset=dataset)
-        self.module_list = self.build_networks()
 
     def forward(self, batch_dict):
         for cur_module in self.module_list:
