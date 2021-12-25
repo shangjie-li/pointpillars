@@ -35,6 +35,8 @@ def parse_config():
 
 if __name__ == '__main__':
     args, cfg = parse_config()
+    print(cfg)
+    
     training_mode = True if args.split == 'train' else False
     dataset = KittiDataset(
         dataset_cfg=cfg.DATA_CONFIG,
