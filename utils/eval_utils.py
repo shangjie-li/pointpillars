@@ -5,6 +5,15 @@ import numpy as np
 import torch
 import tqdm
 
+try:
+    import open3d
+    from . import open3d_vis_utils as V
+    OPEN3D_FLAG = True
+except:
+    import mayavi.mlab as mlab
+    from . import visualize_utils as V
+    OPEN3D_FLAG = False
+
 from . import common_utils
 from pointpillar import load_data_to_gpu
 
@@ -19,7 +28,7 @@ def statistics_info(cfg, ret_dict, metric, disp_dict):
         '(%d, %d) / %d' % (metric['recall_roi_%s' % str(min_thresh)], metric['recall_rcnn_%s' % str(min_thresh)], metric['gt_num'])
 
 
-def eval_one_epoch(cfg, model, dataloader, epoch_id, logger, dist_test=False, save_to_file=False, result_dir=None):
+def eval_one_epoch(cfg, model, dataloader, epoch_id, logger, dist_test=False, save_to_file=False, result_dir=None, display=False):
     result_dir.mkdir(parents=True, exist_ok=True)
 
     final_output_dir = result_dir / 'final_result' / 'data'
@@ -55,6 +64,14 @@ def eval_one_epoch(cfg, model, dataloader, epoch_id, logger, dist_test=False, sa
         load_data_to_gpu(batch_dict)
         with torch.no_grad():
             pred_dicts, ret_dict = model(batch_dict)
+            if display:
+                V.draw_scenes(
+                    points=batch_dict['points'][:, 1:], ref_boxes=pred_dicts[0]['pred_boxes'],
+                    ref_scores=pred_dicts[0]['pred_scores'], ref_labels=pred_dicts[0]['pred_labels']
+                )
+    
+                if not OPEN3D_FLAG:
+                    mlab.show(stop=True)
         disp_dict = {}
 
         statistics_info(cfg, ret_dict, metric, disp_dict)
