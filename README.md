@@ -68,21 +68,21 @@ Implementation of PointPillars in PyTorch for KITTI 3D Object Detetcion
 ## Demo
  - Run the demo with a pretrained model (Download [pointpillar_7728.pth](https://drive.google.com/file/d/1wMxWTpU1qUoY3DsCH31WJmvJxcjFXKlm/view?usp=sharing) and save it in pointpillars/weights.)
    ```
-   python demo.py --cfg_file=data/pointpillar.yaml --ckpt=weights/pointpillar_7728.pth --data_path=data/kitti/training/velodyne/000008.bin
+   python demo.py --ckpt=weights/pointpillar_7728.pth --data_path=data/kitti/training/velodyne/000008.bin
    ```
 
 ## Training
  - Run the command below to train
    ```
    cd pointpillars
-   python train.py --cfg_file=data/pointpillar.yaml --batch_size=2
+   python train.py --batch_size=2
    ```
 
 ## Evaluation
  - Run the command below to evaluate
    ```
    cd pointpillars
-   python test.py --cfg_file=data/pointpillar.yaml --batch_size=2 --ckpt=weights/pointpillar_7728.pth
+   python test.py --ckpt=weights/pointpillar_7728.pth
    ```
  - The 3D detection performance on KITTI should be
    | Class                | AP (R11) BEV              | AP (R11) 3D               |
