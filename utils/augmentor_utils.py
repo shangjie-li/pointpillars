@@ -1,7 +1,7 @@
 import copy
 import numpy as np
 
-from utils import common_utils
+from . import common_utils
 
 
 def random_flip_along_x(gt_boxes, points):
