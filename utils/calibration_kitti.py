@@ -1,6 +1,23 @@
 import numpy as np
 
 
+def calib_to_matricies(calib):
+    """
+    Converts calibration object to transformation matricies
+    Args:
+        calib: calibration.Calibration, Calibration object
+    Returns
+        V2R: (4, 4), Lidar to rectified camera transformation matrix
+        P2: (3, 4), Camera projection matrix
+    """
+    V2C = np.vstack((calib.V2C, np.array([0, 0, 0, 1], dtype=np.float32)))  # (4, 4)
+    R0 = np.hstack((calib.R0, np.zeros((3, 1), dtype=np.float32)))  # (3, 4)
+    R0 = np.vstack((R0, np.array([0, 0, 0, 1], dtype=np.float32)))  # (4, 4)
+    V2R = R0 @ V2C
+    P2 = calib.P2
+    return V2R, P2
+
+
 def get_calib_from_file(calib_file):
     with open(calib_file) as f:
         lines = f.readlines()
