@@ -22,7 +22,7 @@ from utils import common_utils
 
 def parse_config():
     parser = argparse.ArgumentParser(description='arg parser')
-    parser.add_argument('--cfg_file', type=str, default='data/pointpillar.yaml',
+    parser.add_argument('--cfg_file', type=str, default='data/param.yaml',
         help='specify the config for training')
     parser.add_argument('--split', choices=['train', 'val'], default='train')
 

@@ -62,7 +62,7 @@ Implementation of PointPillars in PyTorch for KITTI 3D Object Detetcion
    ```
    # This will create gt_database dir & 5 pkl files in pointpillars/data/kitti.
    cd pointpillars
-   python -m data.kitti_dataset create_kitti_infos data/pointpillar.yaml
+   python -m data.kitti_dataset create_kitti_infos data/param.yaml
    ```
 
 ## Demo

@@ -63,7 +63,7 @@ class DemoDataset(KittiDataset):
 
 def parse_config():
     parser = argparse.ArgumentParser(description='arg parser')
-    parser.add_argument('--cfg_file', type=str, default='data/pointpillar.yaml',
+    parser.add_argument('--cfg_file', type=str, default='data/param.yaml',
                         help='specify the config for demo')
     parser.add_argument('--data_path', type=str, default='data/kitti/training/velodyne/000008.bin',
                         help='specify the point cloud data file or directory')
