@@ -16,7 +16,7 @@ def make_cuda_ext(name, module, sources):
 if __name__ == '__main__':
     setup(
         name='ops',
-        version='0.1',
+        version='0.1.0',
         description='A component of pointpillars',
         install_requires=[
             'numpy<=1.20',

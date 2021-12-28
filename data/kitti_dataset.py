@@ -582,9 +582,12 @@ class KittiDataset(torch_data.Dataset):
         return ret
 
 
-def create_kitti_infos(dataset_cfg, class_names, save_path, workers=4):
+def create_kitti_infos(dataset_cfg, class_names, workers=4):
     dataset = KittiDataset(dataset_cfg=dataset_cfg, class_names=class_names, training=False)
     train_split, val_split = 'train', 'val'
+    
+    root_dir = (Path(__file__).resolve().parent / '../').resolve() # ~/pointpillars
+    save_path = root_dir / dataset_cfg.DATA_PATH
 
     train_filename = save_path / ('kitti_infos_%s.pkl' % train_split)
     val_filename = save_path / ('kitti_infos_%s.pkl' % val_split)
@@ -629,12 +632,10 @@ if __name__ == '__main__':
         from pathlib import Path
         from easydict import EasyDict
         try:
-            dataset_cfg = EasyDict(yaml.load(open(sys.argv[2]), Loader=yaml.FullLoader)) # YAML 5.1 use this for safety
+            cfg = EasyDict(yaml.load(open(sys.argv[2]), Loader=yaml.FullLoader)) # YAML 5.1 use this for safety
         except:
-            dataset_cfg = EasyDict(yaml.load(open(sys.argv[2])))
-        ROOT_DIR = (Path(__file__).resolve().parent / '../').resolve() # ~/pointpillars
+            cfg = EasyDict(yaml.load(open(sys.argv[2])))
         create_kitti_infos(
-            dataset_cfg=dataset_cfg,
-            class_names=['Car', 'Pedestrian', 'Cyclist'],
-            save_path=ROOT_DIR / 'data' / 'kitti'
+            dataset_cfg=cfg.DATA_CONFIG,
+            class_names=cfg.CLASS_NAMES,
         )
