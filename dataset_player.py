@@ -41,7 +41,6 @@ if __name__ == '__main__':
     dataset = KittiDataset(
         dataset_cfg=cfg.DATA_CONFIG,
         class_names=cfg.CLASS_NAMES,
-        root_path=None,
         training=training_mode,
         logger=None,
     )
