@@ -22,7 +22,7 @@ def parse_config():
     parser.add_argument('--cfg_file', type=str, default='data/param.yaml', help='specify the config for training')
 
     parser.add_argument('--workers', type=int, default=4, help='number of workers for dataloader')
-    parser.add_argument('--extra_tag', type=str, default='default', help='extra tag for this experiment')
+    parser.add_argument('--extra_tag', type=str, default='', help='extra tag for this experiment')
     parser.add_argument('--ckpt', type=str, default='weights/pointpillar_7728.pth', help='checkpoint to start from')
     parser.add_argument('--launcher', choices=['none', 'pytorch', 'slurm'], default='none')
     parser.add_argument('--tcp_port', type=int, default=18888, help='tcp port for distrbuted training')
@@ -32,7 +32,7 @@ def parse_config():
 
     parser.add_argument('--max_waiting_mins', type=int, default=30, help='max waiting minutes')
     parser.add_argument('--start_epoch', type=int, default=0, help='')
-    parser.add_argument('--eval_tag', type=str, default='default', help='eval tag for this experiment')
+    parser.add_argument('--eval_tag', type=str, default='', help='eval tag for this experiment')
     parser.add_argument('--eval_all', action='store_true', default=False, help='whether to evaluate all checkpoints')
     parser.add_argument('--ckpt_dir', type=str, default=None, help='specify a ckpt directory to be evaluated if needed')
     parser.add_argument('--save_to_file', action='store_true', default=False, help='')
@@ -42,8 +42,8 @@ def parse_config():
     args = parser.parse_args()
 
     cfg_from_yaml_file(args.cfg_file, cfg)
-    cfg.TAG = Path(args.cfg_file).stem
-    cfg.EXP_GROUP_PATH = '/'.join(args.cfg_file.split('/')[1:-1])  # remove 'cfgs' and 'xxxx.yaml'
+    cfg.TAG = ''
+    cfg.EXP_GROUP_PATH = ''
 
     np.random.seed(1024)
 
