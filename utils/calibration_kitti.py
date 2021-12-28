@@ -1,23 +1,6 @@
 import numpy as np
 
 
-def calib_to_matricies(calib):
-    """
-    Converts calibration object to transformation matricies
-    Args:
-        calib: calibration.Calibration, Calibration object
-    Returns
-        V2R: (4, 4), Lidar to rectified camera transformation matrix
-        P2: (3, 4), Camera projection matrix
-    """
-    V2C = np.vstack((calib.V2C, np.array([0, 0, 0, 1], dtype=np.float32)))  # (4, 4)
-    R0 = np.hstack((calib.R0, np.zeros((3, 1), dtype=np.float32)))  # (3, 4)
-    R0 = np.vstack((R0, np.array([0, 0, 0, 1], dtype=np.float32)))  # (4, 4)
-    V2R = R0 @ V2C
-    P2 = calib.P2
-    return V2R, P2
-
-
 def get_calib_from_file(calib_file):
     with open(calib_file) as f:
         lines = f.readlines()
@@ -39,13 +22,17 @@ def get_calib_from_file(calib_file):
 
 class Calibration(object):
     def __init__(self, calib_file):
+        """
+        Returns:
+            {lidar, (x, y, z)} --V2C--> {rect, (x, y, z)} --P2--> {img, (u, v)}
+        """
         if not isinstance(calib_file, dict):
             calib = get_calib_from_file(calib_file)
         else:
             calib = calib_file
 
         self.P2 = calib['P2']  # 3 x 4
-        self.R0 = calib['R0']  # 3 x 3
+        self.R0 = calib['R0']  # 3 x 3, approximate identity matrixs
         self.V2C = calib['Tr_velo2cam']  # 3 x 4
 
         # Camera intrinsics and extrinsics
@@ -86,7 +73,6 @@ class Calibration(object):
         """
         pts_lidar_hom = self.cart_to_hom(pts_lidar)
         pts_rect = np.dot(pts_lidar_hom, np.dot(self.V2C.T, self.R0.T))
-        # pts_rect = reduce(np.dot, (pts_lidar_hom, self.V2C.T, self.R0.T))
         return pts_rect
 
     def rect_to_img(self, pts_rect):
@@ -120,23 +106,3 @@ class Calibration(object):
         y = ((v - self.cv) * depth_rect) / self.fv + self.ty
         pts_rect = np.concatenate((x.reshape(-1, 1), y.reshape(-1, 1), depth_rect.reshape(-1, 1)), axis=1)
         return pts_rect
-
-    def corners3d_to_img_boxes(self, corners3d):
-        """
-        :param corners3d: (N, 8, 3) corners in rect coordinate
-        :return: boxes: (None, 4) [x1, y1, x2, y2] in rgb coordinate
-        :return: boxes_corner: (None, 8) [xi, yi] in rgb coordinate
-        """
-        sample_num = corners3d.shape[0]
-        corners3d_hom = np.concatenate((corners3d, np.ones((sample_num, 8, 1))), axis=2)  # (N, 8, 4)
-
-        img_pts = np.matmul(corners3d_hom, self.P2.T)  # (N, 8, 3)
-
-        x, y = img_pts[:, :, 0] / img_pts[:, :, 2], img_pts[:, :, 1] / img_pts[:, :, 2]
-        x1, y1 = np.min(x, axis=1), np.min(y, axis=1)
-        x2, y2 = np.max(x, axis=1), np.max(y, axis=1)
-
-        boxes = np.concatenate((x1.reshape(-1, 1), y1.reshape(-1, 1), x2.reshape(-1, 1), y2.reshape(-1, 1)), axis=1)
-        boxes_corner = np.concatenate((x.reshape(-1, 8, 1), y.reshape(-1, 8, 1)), axis=2)
-
-        return boxes, boxes_corner

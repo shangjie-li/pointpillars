@@ -16,27 +16,27 @@ import numpy as np
 import torch
 
 from data import cfg, cfg_from_yaml_file
-from data import DatasetTemplate
+from data import KittiDataset
 from pointpillar import build_network, load_data_to_gpu
 from utils import common_utils
 
 
-class DemoDataset(DatasetTemplate):
-    def __init__(self, dataset_cfg, class_names, training=True, root_path=None, logger=None, ext='.bin'):
+class DemoDataset(KittiDataset):
+    def __init__(self, dataset_cfg, class_names, training=True, data_path=None, logger=None, ext='.bin'):
         """
         Args:
-            root_path:
             dataset_cfg:
             class_names:
             training:
+            data_path:
             logger:
         """
         super().__init__(
-            dataset_cfg=dataset_cfg, class_names=class_names, training=training, root_path=root_path, logger=logger
+            dataset_cfg=dataset_cfg, class_names=class_names, training=training, logger=logger
         )
-        self.root_path = root_path
+        self.data_path = data_path
         self.ext = ext
-        data_file_list = glob.glob(str(root_path / f'*{self.ext}')) if self.root_path.is_dir() else [self.root_path]
+        data_file_list = glob.glob(str(data_path / f'*{self.ext}')) if self.data_path.is_dir() else [self.data_path]
 
         data_file_list.sort()
         self.sample_file_list = data_file_list
@@ -84,7 +84,7 @@ def main():
     logger.info('-----------------Quick Demo of OpenPCDet-------------------------')
     demo_dataset = DemoDataset(
         dataset_cfg=cfg.DATA_CONFIG, class_names=cfg.CLASS_NAMES, training=False,
-        root_path=Path(args.data_path), ext=args.ext, logger=logger
+        data_path=Path(args.data_path), ext=args.ext, logger=logger
     )
     logger.info(f'Total number of samples: \t{len(demo_dataset)}')
 

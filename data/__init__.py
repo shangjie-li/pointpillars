@@ -6,15 +6,8 @@ from torch.utils.data import DataLoader
 from torch.utils.data import DistributedSampler as _DistributedSampler
 
 from .config import cfg, cfg_from_list, cfg_from_yaml_file, log_config_to_file
-from .dataset import DatasetTemplate
 from .kitti_dataset import KittiDataset
 from utils import common_utils
-
-
-__all__ = {
-    'DatasetTemplate': DatasetTemplate,
-    'KittiDataset': KittiDataset,
-}
 
 
 class DistributedSampler(_DistributedSampler):
@@ -40,13 +33,12 @@ class DistributedSampler(_DistributedSampler):
         return iter(indices)
 
 
-def build_dataloader(dataset_cfg, class_names, batch_size, dist, root_path=None, workers=4,
+def build_dataloader(dataset_cfg, class_names, batch_size, dist, workers=4,
                      logger=None, training=True, merge_all_iters_to_one_epoch=False, total_epochs=0):
 
-    dataset = __all__[dataset_cfg.DATASET](
+    dataset = KittiDataset(
         dataset_cfg=dataset_cfg,
         class_names=class_names,
-        root_path=root_path,
         training=training,
         logger=logger,
     )

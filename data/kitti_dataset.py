@@ -1,42 +1,52 @@
 import copy
 import pickle
+from skimage import io
+from collections import defaultdict
+from pathlib import Path
 
 import numpy as np
-from skimage import io
+import torch.utils.data as torch_data
 
-from .dataset import DatasetTemplate
+from .augmentor.data_augmentor import DataAugmentor
+from .processor.data_processor import DataProcessor
+from .processor.point_feature_encoder import PointFeatureEncoder
 from ops.roiaware_pool3d import roiaware_pool3d_utils
 from utils import box_utils, calibration_kitti, common_utils, object3d_kitti
 
 
-class KittiDataset(DatasetTemplate):
-    def __init__(self, dataset_cfg, class_names, training=True, root_path=None, logger=None):
+class KittiDataset(torch_data.Dataset):
+    def __init__(self, dataset_cfg, class_names, training=True, logger=None):
         """
         Args:
-            root_path:
-            dataset_cfg:
-            class_names:
-            training:
-            logger:
+            dataset_cfg: dict
+            class_names: list
         """
-        super().__init__(
-            dataset_cfg=dataset_cfg, class_names=class_names, training=training, root_path=root_path, logger=logger
-        )
-        self.split = self.dataset_cfg.DATA_SPLIT[self.mode]
+        self.dataset_cfg = dataset_cfg
+        self.class_names = class_names
+        assert self.dataset_cfg is not None
+        assert self.class_names is not None
+        
+        self.training = training
+        self.mode = 'train' if self.training else 'test'
+        self.logger = logger
+        
+        self.root_path = Path(self.dataset_cfg.DATA_PATH) # e.g. Path('data/kitti')
+        self.split = self.dataset_cfg.DATA_SPLIT[self.mode] # e.g. 'train' or 'val'
         self.root_split_path = self.root_path / ('training' if self.split != 'test' else 'testing')
-
+        
         split_dir = self.root_path / 'ImageSets' / (self.split + '.txt')
         self.sample_id_list = [x.strip() for x in open(split_dir).readlines()] if split_dir.exists() else None
 
         self.kitti_infos = []
-        self.include_kitti_data(self.mode)
+        self.include_kitti_data()
+        self.include_processor()
 
-    def include_kitti_data(self, mode):
+    def include_kitti_data(self):
         if self.logger is not None:
             self.logger.info('Loading KITTI dataset')
         kitti_infos = []
 
-        for info_path in self.dataset_cfg.INFO_PATH[mode]:
+        for info_path in self.dataset_cfg.INFO_PATH[self.mode]:
             info_path = self.root_path / info_path
             if not info_path.exists():
                 continue
@@ -50,30 +60,36 @@ class KittiDataset(DatasetTemplate):
             self.logger.info('Total samples for KITTI dataset: %d' % (len(kitti_infos)))
 
     def set_split(self, split):
-        super().__init__(
-            dataset_cfg=self.dataset_cfg, class_names=self.class_names, training=self.training, root_path=self.root_path, logger=self.logger
-        )
         self.split = split
         self.root_split_path = self.root_path / ('training' if self.split != 'test' else 'testing')
 
         split_dir = self.root_path / 'ImageSets' / (self.split + '.txt')
         self.sample_id_list = [x.strip() for x in open(split_dir).readlines()] if split_dir.exists() else None
+        
+        self.kitti_infos = []
+        self.include_kitti_data()
+        self.include_processor()
 
     def get_lidar(self, idx):
+        """
+        Args:
+            idx: int, Sample index
+        Returns:
+            points: (N, 4), Points of (x, y, z, intensity)
+        """
         lidar_file = self.root_split_path / 'velodyne' / ('%s.bin' % idx)
-        assert lidar_file.exists()
+        assert lidar_file.exists(), 'File not found: %s' % lidar_file
         return np.fromfile(str(lidar_file), dtype=np.float32).reshape(-1, 4)
 
     def get_image(self, idx):
         """
-        Loads image for a sample
         Args:
             idx: int, Sample index
         Returns:
             image: (H, W, 3), RGB Image
         """
         img_file = self.root_split_path / 'image_2' / ('%s.png' % idx)
-        assert img_file.exists()
+        assert img_file.exists(), 'File not found: %s' % img_file
         image = io.imread(img_file)
         image = image.astype(np.float32)
         image /= 255.0
@@ -81,32 +97,29 @@ class KittiDataset(DatasetTemplate):
 
     def get_image_shape(self, idx):
         img_file = self.root_split_path / 'image_2' / ('%s.png' % idx)
-        assert img_file.exists()
+        assert img_file.exists(), 'File not found: %s' % img_file
         return np.array(io.imread(img_file).shape[:2], dtype=np.int32)
 
     def get_label(self, idx):
+        """
+        Args:
+            idx: int, Sample index
+        Returns:
+            objects: list, [Object3d, Object3d, ...]
+        """
         label_file = self.root_split_path / 'label_2' / ('%s.txt' % idx)
-        assert label_file.exists()
+        assert label_file.exists(), 'File not found: %s' % label_file
         return object3d_kitti.get_objects_from_label(label_file)
 
-    def get_depth_map(self, idx):
-        """
-        Loads depth map for a sample
-        Args:
-            idx: str, Sample index
-        Returns:
-            depth: (H, W), Depth map
-        """
-        depth_file = self.root_split_path / 'depth_2' / ('%s.png' % idx)
-        assert depth_file.exists()
-        depth = io.imread(depth_file)
-        depth = depth.astype(np.float32)
-        depth /= 256.0
-        return depth
-
     def get_calib(self, idx):
+        """
+        Args:
+            idx: int, Sample index
+        Returns:
+            calib: calibration_kitti.Calibration
+        """
         calib_file = self.root_split_path / 'calib' / ('%s.txt' % idx)
-        assert calib_file.exists()
+        assert calib_file.exists(), 'File not found: %s' % calib_file
         return calibration_kitti.Calibration(calib_file)
 
     def get_road_plane(self, idx):
@@ -128,22 +141,13 @@ class KittiDataset(DatasetTemplate):
         return plane
 
     @staticmethod
-    def get_fov_flag(pts_rect, img_shape, calib):
-        """
-        Args:
-            pts_rect:
-            img_shape:
-            calib:
-
-        Returns:
-
-        """
+    def get_fov_flag(points, img_shape, calib):
+        pts_rect = calib.lidar_to_rect(points[:, 0:3])
         pts_img, pts_rect_depth = calib.rect_to_img(pts_rect)
         val_flag_1 = np.logical_and(pts_img[:, 0] >= 0, pts_img[:, 0] < img_shape[1])
         val_flag_2 = np.logical_and(pts_img[:, 1] >= 0, pts_img[:, 1] < img_shape[0])
         val_flag_merge = np.logical_and(val_flag_1, val_flag_2)
         pts_valid_flag = np.logical_and(val_flag_merge, pts_rect_depth >= 0)
-
         return pts_valid_flag
 
     def get_infos(self, num_workers=4, has_label=True, count_inside_pts=True, sample_id_list=None):
@@ -152,20 +156,20 @@ class KittiDataset(DatasetTemplate):
         def process_single_scene(sample_idx):
             print('%s sample_idx: %s' % (self.split, sample_idx))
             info = {}
+            
             pc_info = {'num_features': 4, 'lidar_idx': sample_idx}
             info['point_cloud'] = pc_info
 
             image_info = {'image_idx': sample_idx, 'image_shape': self.get_image_shape(sample_idx)}
             info['image'] = image_info
+            
             calib = self.get_calib(sample_idx)
-
-            P2 = np.concatenate([calib.P2, np.array([[0., 0., 0., 1.]])], axis=0)
+            P2_4x4 = np.concatenate([calib.P2, np.array([[0., 0., 0., 1.]])], axis=0)
             R0_4x4 = np.zeros([4, 4], dtype=calib.R0.dtype)
             R0_4x4[3, 3] = 1.
             R0_4x4[:3, :3] = calib.R0
             V2C_4x4 = np.concatenate([calib.V2C, np.array([[0., 0., 0., 1.]])], axis=0)
-            calib_info = {'P2': P2, 'R0_rect': R0_4x4, 'Tr_velo_to_cam': V2C_4x4}
-
+            calib_info = {'P2': P2_4x4, 'R0_rect': R0_4x4, 'Tr_velo_to_cam': V2C_4x4}
             info['calib'] = calib_info
 
             if has_label:
@@ -182,7 +186,7 @@ class KittiDataset(DatasetTemplate):
                 annotations['score'] = np.array([obj.score for obj in obj_list])
                 annotations['difficulty'] = np.array([obj.level for obj in obj_list], np.int32)
 
-                num_objects = len([obj.cls_type for obj in obj_list if obj.cls_type != 'DontCare'])
+                num_objects = len([obj.cls_type for obj in obj_list if obj.cls_type != 'DontCare']) # including Pedestrian, Truck, Car, Cyclist, Misc, etc.
                 num_gt = len(annotations['name'])
                 index = list(range(num_objects)) + [-1] * (num_gt - num_objects)
                 annotations['index'] = np.array(index, dtype=np.int32)
@@ -193,7 +197,7 @@ class KittiDataset(DatasetTemplate):
                 loc_lidar = calib.rect_to_lidar(loc)
                 l, h, w = dims[:, 0:1], dims[:, 1:2], dims[:, 2:3]
                 loc_lidar[:, 2] += h[:, 0] / 2
-                gt_boxes_lidar = np.concatenate([loc_lidar, l, w, h, -(np.pi / 2 + rots[..., np.newaxis])], axis=1)
+                gt_boxes_lidar = np.concatenate([loc_lidar, l, w, h, -(np.pi / 2 + rots[..., np.newaxis])], axis=1) # (N, 7)
                 annotations['gt_boxes_lidar'] = gt_boxes_lidar
 
                 info['annos'] = annotations
@@ -201,10 +205,10 @@ class KittiDataset(DatasetTemplate):
                 if count_inside_pts:
                     points = self.get_lidar(sample_idx)
                     calib = self.get_calib(sample_idx)
-                    pts_rect = calib.lidar_to_rect(points[:, 0:3])
-
-                    fov_flag = self.get_fov_flag(pts_rect, info['image']['image_shape'], calib)
+                    
+                    fov_flag = self.get_fov_flag(points, info['image']['image_shape'], calib)
                     pts_fov = points[fov_flag]
+                    
                     corners_lidar = box_utils.boxes_to_corners_3d(gt_boxes_lidar)
                     num_points_in_gt = -np.ones(num_gt, dtype=np.int32)
 
@@ -361,10 +365,17 @@ class KittiDataset(DatasetTemplate):
 
         return ap_result_str, ap_dict
 
+    def __setstate__(self, d):
+        self.__dict__.update(d)
+    
+    def __getstate__(self):
+        d = dict(self.__dict__)
+        del d['logger']
+        return d
+    
     def __len__(self):
         if self._merge_all_iters_to_one_epoch:
             return len(self.kitti_infos) * self.total_epochs
-
         return len(self.kitti_infos)
 
     def __getitem__(self, index):
@@ -406,28 +417,173 @@ class KittiDataset(DatasetTemplate):
         if "points" in get_item_list:
             points = self.get_lidar(sample_idx)
             if self.dataset_cfg.FOV_POINTS_ONLY:
-                pts_rect = calib.lidar_to_rect(points[:, 0:3])
-                fov_flag = self.get_fov_flag(pts_rect, img_shape, calib)
+                fov_flag = self.get_fov_flag(points, img_shape, calib)
                 points = points[fov_flag]
             input_dict['points'] = points
 
         if "images" in get_item_list:
             input_dict['images'] = self.get_image(sample_idx)
 
-        if "depth_maps" in get_item_list:
-            input_dict['depth_maps'] = self.get_depth_map(sample_idx)
-
-        if "calib_matricies" in get_item_list:
-            input_dict["trans_lidar_to_cam"], input_dict["trans_cam_to_img"] = calibration_kitti.calib_to_matricies(calib)
-
         data_dict = self.prepare_data(data_dict=input_dict)
 
         data_dict['image_shape'] = img_shape
         return data_dict
 
+    def include_processor(self):
+        self.point_cloud_range = np.array(self.dataset_cfg.POINT_CLOUD_RANGE, dtype=np.float32)
+        self.point_feature_encoder = PointFeatureEncoder(
+            self.dataset_cfg.POINT_FEATURE_ENCODING,
+            point_cloud_range=self.point_cloud_range
+        )
+        self.data_augmentor = DataAugmentor(
+            self.root_path, self.dataset_cfg.DATA_AUGMENTOR, self.class_names, logger=self.logger
+        ) if self.training else None
+        self.data_processor = DataProcessor(
+            self.dataset_cfg.DATA_PROCESSOR, point_cloud_range=self.point_cloud_range,
+            training=self.training, num_point_features=self.point_feature_encoder.num_point_features
+        )
+        self.grid_size = self.data_processor.grid_size
+        self.voxel_size = self.data_processor.voxel_size
+        self.total_epochs = 0
+        self._merge_all_iters_to_one_epoch = False
 
-def create_kitti_infos(dataset_cfg, class_names, data_path, save_path, workers=4):
-    dataset = KittiDataset(dataset_cfg=dataset_cfg, class_names=class_names, root_path=data_path, training=False)
+    def merge_all_iters_to_one_epoch(self, merge=True, epochs=None):
+        if merge:
+            self._merge_all_iters_to_one_epoch = True
+            self.total_epochs = epochs
+        else:
+            self._merge_all_iters_to_one_epoch = False
+
+    def prepare_data(self, data_dict):
+        """
+        Args:
+            data_dict:
+                points: optional, (N, 3 + C_in)
+                gt_boxes: optional, (N, 7 + C) [x, y, z, dx, dy, dz, heading, ...]
+                gt_names: optional, (N), string
+                ...
+
+        Returns:
+            data_dict:
+                frame_id: string
+                points: (N, 3 + C_in)
+                gt_boxes: optional, (N, 7 + C) [x, y, z, dx, dy, dz, heading, ...]
+                gt_names: optional, (N), string
+                use_lead_xyz: bool
+                voxels: optional (num_voxels, max_points_per_voxel, 3 + C)
+                voxel_coords: optional (num_voxels, 3)
+                voxel_num_points: optional (num_voxels)
+                ...
+        """
+        if self.training:
+            assert 'gt_boxes' in data_dict, 'gt_boxes should be provided for training'
+            gt_boxes_mask = np.array([n in self.class_names for n in data_dict['gt_names']], dtype=np.bool_)
+
+            data_dict = self.data_augmentor.forward(
+                data_dict={
+                    **data_dict,
+                    'gt_boxes_mask': gt_boxes_mask
+                }
+            )
+
+        if data_dict.get('gt_boxes', None) is not None:
+            selected = common_utils.keep_arrays_by_name(data_dict['gt_names'], self.class_names)
+            data_dict['gt_boxes'] = data_dict['gt_boxes'][selected]
+            data_dict['gt_names'] = data_dict['gt_names'][selected]
+            gt_classes = np.array([self.class_names.index(n) + 1 for n in data_dict['gt_names']], dtype=np.int32)
+            gt_boxes = np.concatenate((data_dict['gt_boxes'], gt_classes.reshape(-1, 1).astype(np.float32)), axis=1)
+            data_dict['gt_boxes'] = gt_boxes
+
+            if data_dict.get('gt_boxes2d', None) is not None:
+                data_dict['gt_boxes2d'] = data_dict['gt_boxes2d'][selected]
+
+        if data_dict.get('points', None) is not None:
+            data_dict = self.point_feature_encoder.forward(data_dict)
+
+        data_dict = self.data_processor.forward(
+            data_dict=data_dict
+        )
+
+        if self.training and len(data_dict['gt_boxes']) == 0:
+            new_index = np.random.randint(self.__len__())
+            return self.__getitem__(new_index)
+
+        data_dict.pop('gt_names', None)
+
+        return data_dict
+
+    @staticmethod
+    def collate_batch(batch_list, _unused=False):
+        data_dict = defaultdict(list)
+        for cur_sample in batch_list:
+            for key, val in cur_sample.items():
+                data_dict[key].append(val)
+        batch_size = len(batch_list)
+        ret = {}
+
+        for key, val in data_dict.items():
+            try:
+                if key in ['voxels', 'voxel_num_points']:
+                    ret[key] = np.concatenate(val, axis=0)
+                elif key in ['points', 'voxel_coords']:
+                    coors = []
+                    for i, coor in enumerate(val):
+                        coor_pad = np.pad(coor, ((0, 0), (1, 0)), mode='constant', constant_values=i)
+                        coors.append(coor_pad)
+                    ret[key] = np.concatenate(coors, axis=0)
+                elif key in ['gt_boxes']:
+                    max_gt = max([len(x) for x in val])
+                    batch_gt_boxes3d = np.zeros((batch_size, max_gt, val[0].shape[-1]), dtype=np.float32)
+                    for k in range(batch_size):
+                        batch_gt_boxes3d[k, :val[k].__len__(), :] = val[k]
+                    ret[key] = batch_gt_boxes3d
+                elif key in ['gt_boxes2d']:
+                    max_boxes = 0
+                    max_boxes = max([len(x) for x in val])
+                    batch_boxes2d = np.zeros((batch_size, max_boxes, val[0].shape[-1]), dtype=np.float32)
+                    for k in range(batch_size):
+                        if val[k].size > 0:
+                            batch_boxes2d[k, :val[k].__len__(), :] = val[k]
+                    ret[key] = batch_boxes2d
+                elif key in ["images"]:
+                    # Get largest image size (H, W)
+                    max_h = 0
+                    max_w = 0
+                    for image in val:
+                        max_h = max(max_h, image.shape[0])
+                        max_w = max(max_w, image.shape[1])
+
+                    # Change size of images
+                    images = []
+                    for image in val:
+                        pad_h = common_utils.get_pad_params(desired_size=max_h, cur_size=image.shape[0])
+                        pad_w = common_utils.get_pad_params(desired_size=max_w, cur_size=image.shape[1])
+                        pad_width = (pad_h, pad_w)
+                        # Pad with nan, to be replaced later in the pipeline.
+                        pad_value = np.nan
+
+                        if key == "images":
+                            pad_width = (pad_h, pad_w, (0, 0))
+
+                        image_pad = np.pad(image,
+                                           pad_width=pad_width,
+                                           mode='constant',
+                                           constant_values=pad_value)
+
+                        images.append(image_pad)
+                    ret[key] = np.stack(images, axis=0)
+                else:
+                    ret[key] = np.stack(val, axis=0)
+            except:
+                print('Error in collate_batch: key=%s' % key)
+                raise TypeError
+
+        ret['batch_size'] = batch_size
+        return ret
+
+
+def create_kitti_infos(dataset_cfg, class_names, save_path, workers=4):
+    dataset = KittiDataset(dataset_cfg=dataset_cfg, class_names=class_names, training=False)
     train_split, val_split = 'train', 'val'
 
     train_filename = save_path / ('kitti_infos_%s.pkl' % train_split)
@@ -480,6 +636,5 @@ if __name__ == '__main__':
         create_kitti_infos(
             dataset_cfg=dataset_cfg,
             class_names=['Car', 'Pedestrian', 'Cyclist'],
-            data_path=ROOT_DIR / 'data' / 'kitti',
             save_path=ROOT_DIR / 'data' / 'kitti'
         )
