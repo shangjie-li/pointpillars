@@ -36,10 +36,9 @@ class DemoDataset(KittiDataset):
         )
         self.data_path = data_path
         self.ext = ext
-        data_file_list = glob.glob(str(data_path / f'*{self.ext}')) if self.data_path.is_dir() else [self.data_path]
-
-        data_file_list.sort()
-        self.sample_file_list = data_file_list
+        file_list = glob.glob(str(data_path / f'*{self.ext}')) if self.data_path.is_dir() else [self.data_path]
+        file_list.sort()
+        self.sample_file_list = file_list
 
     def __len__(self):
         return len(self.sample_file_list)
@@ -81,7 +80,7 @@ def parse_config():
 def main():
     args, cfg = parse_config()
     logger = common_utils.create_logger()
-    logger.info('-----------------Quick Demo of OpenPCDet-------------------------')
+    logger.info('-----------------Quick Demo of PointPillars-------------------------')
     demo_dataset = DemoDataset(
         dataset_cfg=cfg.DATA_CONFIG, class_names=cfg.CLASS_NAMES, training=False,
         data_path=Path(args.data_path), ext=args.ext, logger=logger

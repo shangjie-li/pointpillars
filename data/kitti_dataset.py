@@ -33,39 +33,21 @@ class KittiDataset(torch_data.Dataset):
         self.root_path = Path(self.dataset_cfg.DATA_PATH) # e.g. Path('data/kitti')
         self.split = self.dataset_cfg.DATA_SPLIT[self.mode] # e.g. 'train' or 'val'
         self.root_split_path = self.root_path / ('training' if self.split != 'test' else 'testing')
-        
-        split_dir = self.root_path / 'ImageSets' / (self.split + '.txt')
-        self.sample_id_list = [x.strip() for x in open(split_dir).readlines()] if split_dir.exists() else None
+
+        split_file = self.root_path / 'ImageSets' / (self.split + '.txt')
+        self.sample_id_list = [x.strip() for x in open(split_file).readlines()] if split_file.exists() else None
 
         self.kitti_infos = []
         self.include_kitti_data()
         self.include_processor()
 
-    def include_kitti_data(self):
-        if self.logger is not None:
-            self.logger.info('Loading KITTI dataset')
-        kitti_infos = []
-
-        for info_path in self.dataset_cfg.INFO_PATH[self.mode]:
-            info_path = self.root_path / info_path
-            if not info_path.exists():
-                continue
-            with open(info_path, 'rb') as f:
-                infos = pickle.load(f)
-                kitti_infos.extend(infos)
-
-        self.kitti_infos.extend(kitti_infos)
-
-        if self.logger is not None:
-            self.logger.info('Total samples for KITTI dataset: %d' % (len(kitti_infos)))
-
     def set_split(self, split):
         self.split = split
         self.root_split_path = self.root_path / ('training' if self.split != 'test' else 'testing')
 
-        split_dir = self.root_path / 'ImageSets' / (self.split + '.txt')
-        self.sample_id_list = [x.strip() for x in open(split_dir).readlines()] if split_dir.exists() else None
-        
+        split_file = self.root_path / 'ImageSets' / (self.split + '.txt')
+        self.sample_id_list = [x.strip() for x in open(split_file).readlines()] if split_file.exists() else None
+
         self.kitti_infos = []
         self.include_kitti_data()
         self.include_processor()
@@ -372,62 +354,24 @@ class KittiDataset(torch_data.Dataset):
         d = dict(self.__dict__)
         del d['logger']
         return d
-    
-    def __len__(self):
-        if self._merge_all_iters_to_one_epoch:
-            return len(self.kitti_infos) * self.total_epochs
-        return len(self.kitti_infos)
 
-    def __getitem__(self, index):
-        # index = 4
-        if self._merge_all_iters_to_one_epoch:
-            index = index % len(self.kitti_infos)
+    def include_kitti_data(self):
+        if self.logger is not None:
+            self.logger.info('Loading KITTI dataset')
+        kitti_infos = []
 
-        info = copy.deepcopy(self.kitti_infos[index])
+        for info_path in self.dataset_cfg.INFO_PATH[self.mode]:
+            info_path = self.root_path / info_path
+            if not info_path.exists():
+                continue
+            with open(info_path, 'rb') as f:
+                infos = pickle.load(f)
+                kitti_infos.extend(infos)
 
-        sample_idx = info['point_cloud']['lidar_idx']
-        img_shape = info['image']['image_shape']
-        calib = self.get_calib(sample_idx)
-        get_item_list = self.dataset_cfg.get('GET_ITEM_LIST', ['points'])
+        self.kitti_infos.extend(kitti_infos)
 
-        input_dict = {
-            'frame_id': sample_idx,
-            'calib': calib,
-        }
-
-        if 'annos' in info:
-            annos = info['annos']
-            annos = common_utils.drop_info_with_name(annos, name='DontCare')
-            loc, dims, rots = annos['location'], annos['dimensions'], annos['rotation_y']
-            gt_names = annos['name']
-            gt_boxes_camera = np.concatenate([loc, dims, rots[..., np.newaxis]], axis=1).astype(np.float32)
-            gt_boxes_lidar = box_utils.boxes3d_kitti_camera_to_lidar(gt_boxes_camera, calib)
-
-            input_dict.update({
-                'gt_names': gt_names,
-                'gt_boxes': gt_boxes_lidar
-            })
-            if "gt_boxes2d" in get_item_list:
-                input_dict['gt_boxes2d'] = annos["bbox"]
-
-            road_plane = self.get_road_plane(sample_idx)
-            if road_plane is not None:
-                input_dict['road_plane'] = road_plane
-
-        if "points" in get_item_list:
-            points = self.get_lidar(sample_idx)
-            if self.dataset_cfg.FOV_POINTS_ONLY:
-                fov_flag = self.get_fov_flag(points, img_shape, calib)
-                points = points[fov_flag]
-            input_dict['points'] = points
-
-        if "images" in get_item_list:
-            input_dict['images'] = self.get_image(sample_idx)
-
-        data_dict = self.prepare_data(data_dict=input_dict)
-
-        data_dict['image_shape'] = img_shape
-        return data_dict
+        if self.logger is not None:
+            self.logger.info('Total samples for KITTI dataset: %d' % (len(kitti_infos)))
 
     def include_processor(self):
         self.point_cloud_range = np.array(self.dataset_cfg.POINT_CLOUD_RANGE, dtype=np.float32)
@@ -510,6 +454,62 @@ class KittiDataset(torch_data.Dataset):
 
         data_dict.pop('gt_names', None)
 
+        return data_dict
+
+    def __len__(self):
+        if self._merge_all_iters_to_one_epoch:
+            return len(self.kitti_infos) * self.total_epochs
+        return len(self.kitti_infos)
+
+    def __getitem__(self, index):
+        # index = 4
+        if self._merge_all_iters_to_one_epoch:
+            index = index % len(self.kitti_infos)
+
+        info = copy.deepcopy(self.kitti_infos[index])
+
+        sample_idx = info['point_cloud']['lidar_idx']
+        img_shape = info['image']['image_shape']
+        calib = self.get_calib(sample_idx)
+        get_item_list = self.dataset_cfg.get('GET_ITEM_LIST', ['points'])
+
+        input_dict = {
+            'frame_id': sample_idx,
+            'calib': calib,
+        }
+
+        if 'annos' in info:
+            annos = info['annos']
+            annos = common_utils.drop_info_with_name(annos, name='DontCare')
+            loc, dims, rots = annos['location'], annos['dimensions'], annos['rotation_y']
+            gt_names = annos['name']
+            gt_boxes_camera = np.concatenate([loc, dims, rots[..., np.newaxis]], axis=1).astype(np.float32)
+            gt_boxes_lidar = box_utils.boxes3d_kitti_camera_to_lidar(gt_boxes_camera, calib)
+
+            input_dict.update({
+                'gt_names': gt_names,
+                'gt_boxes': gt_boxes_lidar
+            })
+            if "gt_boxes2d" in get_item_list:
+                input_dict['gt_boxes2d'] = annos["bbox"]
+
+            road_plane = self.get_road_plane(sample_idx)
+            if road_plane is not None:
+                input_dict['road_plane'] = road_plane
+
+        if "points" in get_item_list:
+            points = self.get_lidar(sample_idx)
+            if self.dataset_cfg.FOV_POINTS_ONLY:
+                fov_flag = self.get_fov_flag(points, img_shape, calib)
+                points = points[fov_flag]
+            input_dict['points'] = points
+
+        if "images" in get_item_list:
+            input_dict['images'] = self.get_image(sample_idx)
+
+        data_dict = self.prepare_data(data_dict=input_dict)
+
+        data_dict['image_shape'] = img_shape
         return data_dict
 
     @staticmethod
