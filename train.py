@@ -169,9 +169,6 @@ def main():
         merge_all_iters_to_one_epoch=args.merge_all_iters_to_one_epoch
     )
 
-    if hasattr(train_set, 'use_shared_memory') and train_set.use_shared_memory:
-        train_set.clean_shared_memory()
-
     logger.info('**********************End training %s/%s(%s)**********************\n\n\n'
                 % (cfg.EXP_GROUP_PATH, cfg.TAG, args.extra_tag))
 

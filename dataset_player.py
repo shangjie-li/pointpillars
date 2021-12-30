@@ -24,7 +24,10 @@ def parse_config():
     parser = argparse.ArgumentParser(description='arg parser')
     parser.add_argument('--cfg_file', type=str, default='data/config.yaml',
         help='specify the config for training')
-    parser.add_argument('--split', choices=['train', 'val'], default='train')
+    parser.add_argument('--training', action='store_true', default=False,
+        help='whether to use training mode')
+    parser.add_argument('--data_augmentation', action='store_true', default=False,
+        help='whether to use data augmentation')
 
     args = parser.parse_args()
 
@@ -37,12 +40,11 @@ if __name__ == '__main__':
     args, cfg = parse_config()
     print(cfg)
     
-    training_mode = True if args.split == 'train' else False
     dataset = KittiDataset(
         dataset_cfg=cfg.DATA_CONFIG,
         class_names=cfg.CLASS_NAMES,
-        training=training_mode,
-        logger=None,
+        training=args.training,
+        data_augmentation=args.data_augmentation
     )
     
     for i in range(len(dataset)):

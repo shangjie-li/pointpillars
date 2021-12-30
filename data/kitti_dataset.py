@@ -9,13 +9,14 @@ import torch.utils.data as torch_data
 
 from .augmentor.data_augmentor import DataAugmentor
 from .processor.data_processor import DataProcessor
-from .processor.point_feature_encoder import PointFeatureEncoder
 from ops.roiaware_pool3d import roiaware_pool3d_utils
 from utils import box_utils, calibration_kitti, common_utils, object3d_kitti
 
 
 class KittiDataset(torch_data.Dataset):
-    def __init__(self, dataset_cfg, class_names, training=True, logger=None):
+    def __init__(self, dataset_cfg, class_names, training=True, logger=None,
+            include_kitti_infos=True, include_processor=True, data_augmentation=True
+        ):
         """
         Args:
             dataset_cfg: dict
@@ -23,45 +24,40 @@ class KittiDataset(torch_data.Dataset):
         """
         self.dataset_cfg = dataset_cfg
         self.class_names = class_names
-        assert self.dataset_cfg is not None
-        assert self.class_names is not None
         
-        self.training = training
-        self.mode = 'train' if self.training else 'test'
         self.logger = logger
+        self.training = training
+        if self.training:
+            self.split = dataset_cfg.DATA_SPLIT['train']
+            self.info_path = dataset_cfg.INFO_PATH['train']
+            self.data_augmentation = data_augmentation
+        else:
+            self.split = dataset_cfg.DATA_SPLIT['test']
+            self.info_path = dataset_cfg.INFO_PATH['test']
+            self.data_augmentation = False
+            
         
         self.root_path = Path(self.dataset_cfg.DATA_PATH) # e.g. Path('data/kitti')
-        self.split = self.dataset_cfg.DATA_SPLIT[self.mode] # e.g. 'train' or 'val'
-        self.root_split_path = self.root_path / ('training' if self.split != 'test' else 'testing')
+        self.root_split_path = self.root_path / 'training' if self.split in ['train', 'val'] else 'testing'
 
         split_file = self.root_path / 'ImageSets' / (self.split + '.txt')
         self.sample_id_list = [x.strip() for x in open(split_file).readlines()] if split_file.exists() else None
 
-        self.kitti_infos = []
-        self.include_kitti_data()
-        self.include_processor()
+        if include_kitti_infos:
+            self.include_kitti_infos()
+        if include_processor:
+            self.include_processor()
 
-    def set_split(self, split):
-        self.split = split
-        self.root_split_path = self.root_path / ('training' if self.split != 'test' else 'testing')
-
-        split_file = self.root_path / 'ImageSets' / (self.split + '.txt')
-        self.sample_id_list = [x.strip() for x in open(split_file).readlines()] if split_file.exists() else None
-
-        self.kitti_infos = []
-        self.include_kitti_data()
-        self.include_processor()
-
-    def get_lidar(self, idx):
+    def get_points(self, idx):
         """
         Args:
-            idx: int, Sample index
+            idx: int, c
         Returns:
             points: (N, 4), Points of (x, y, z, intensity)
         """
-        lidar_file = self.root_split_path / 'velodyne' / ('%s.bin' % idx)
-        assert lidar_file.exists(), 'File not found: %s' % lidar_file
-        return np.fromfile(str(lidar_file), dtype=np.float32).reshape(-1, 4)
+        pts_file = self.root_split_path / 'velodyne' / ('%s.bin' % idx)
+        assert pts_file.exists(), 'File not found: %s' % pts_file
+        return np.fromfile(str(pts_file), dtype=np.float32).reshape(-1, 4)
 
     def get_image(self, idx):
         """
@@ -78,6 +74,12 @@ class KittiDataset(torch_data.Dataset):
         return image
 
     def get_image_shape(self, idx):
+        """
+        Args:
+            idx: int, Sample index
+        Returns:
+            image_shape: (2), h * w
+        """
         img_file = self.root_split_path / 'image_2' / ('%s.png' % idx)
         assert img_file.exists(), 'File not found: %s' % img_file
         return np.array(io.imread(img_file).shape[:2], dtype=np.int32)
@@ -105,9 +107,14 @@ class KittiDataset(torch_data.Dataset):
         return calibration_kitti.Calibration(calib_file)
 
     def get_road_plane(self, idx):
+        """
+        Args:
+            idx: int, Sample index
+        Returns:
+            plane: (4)
+        """
         plane_file = self.root_split_path / 'planes' / ('%s.txt' % idx)
-        if not plane_file.exists():
-            return None
+        assert plane_file.exists(), 'File not found: %s' % plane_file
 
         with open(plane_file, 'r') as f:
             lines = f.readlines()
@@ -151,6 +158,7 @@ class KittiDataset(torch_data.Dataset):
             R0_4x4[3, 3] = 1.
             R0_4x4[:3, :3] = calib.R0
             V2C_4x4 = np.concatenate([calib.V2C, np.array([[0., 0., 0., 1.]])], axis=0)
+            
             calib_info = {'P2': P2_4x4, 'R0_rect': R0_4x4, 'Tr_velo_to_cam': V2C_4x4}
             info['calib'] = calib_info
 
@@ -179,13 +187,13 @@ class KittiDataset(torch_data.Dataset):
                 loc_lidar = calib.rect_to_lidar(loc)
                 l, h, w = dims[:, 0:1], dims[:, 1:2], dims[:, 2:3]
                 loc_lidar[:, 2] += h[:, 0] / 2
-                gt_boxes_lidar = np.concatenate([loc_lidar, l, w, h, -(np.pi / 2 + rots[..., np.newaxis])], axis=1) # (N, 7)
+                gt_boxes_lidar = np.concatenate([loc_lidar, l, w, h, -(np.pi / 2 + rots[..., np.newaxis])], axis=1) # (M, 7)
                 annotations['gt_boxes_lidar'] = gt_boxes_lidar
 
                 info['annos'] = annotations
 
                 if count_inside_pts:
-                    points = self.get_lidar(sample_idx)
+                    points = self.get_points(sample_idx)
                     calib = self.get_calib(sample_idx)
                     
                     fov_flag = self.get_fov_flag(points, info['image']['image_shape'], calib)
@@ -206,15 +214,16 @@ class KittiDataset(torch_data.Dataset):
             infos = executor.map(process_single_scene, sample_id_list)
         return list(infos)
 
-    def create_groundtruth_database(self, info_path=None, used_classes=None, split='train'):
+    def create_groundtruth_database(self):
         import torch
 
-        database_save_path = Path(self.root_path) / ('gt_database' if split == 'train' else ('gt_database_%s' % split))
-        db_info_save_path = Path(self.root_path) / ('kitti_dbinfos_%s.pkl' % split)
+        database_save_path = Path(self.root_path) / 'gt_database'
+        db_info_save_path = Path(self.root_path) / 'kitti_dbinfos_train.pkl'
 
         database_save_path.mkdir(parents=True, exist_ok=True)
         all_db_infos = {}
 
+        info_path = self.root_path / self.info_path
         with open(info_path, 'rb') as f:
             infos = pickle.load(f)
 
@@ -222,11 +231,12 @@ class KittiDataset(torch_data.Dataset):
             print('gt_database sample: %d/%d' % (k + 1, len(infos)))
             info = infos[k]
             sample_idx = info['point_cloud']['lidar_idx']
-            points = self.get_lidar(sample_idx)
+            points = self.get_points(sample_idx)
             annos = info['annos']
             names = annos['name']
-            difficulty = annos['difficulty']
             bbox = annos['bbox']
+            score = annos['score']
+            difficulty = annos['difficulty']
             gt_boxes = annos['gt_boxes_lidar']
 
             num_obj = gt_boxes.shape[0]
@@ -243,15 +253,14 @@ class KittiDataset(torch_data.Dataset):
                 with open(filepath, 'w') as f:
                     gt_points.tofile(f)
 
-                if (used_classes is None) or names[i] in used_classes:
-                    db_path = str(filepath.relative_to(self.root_path))  # gt_database/xxxxx.bin
-                    db_info = {'name': names[i], 'path': db_path, 'image_idx': sample_idx, 'gt_idx': i,
-                               'box3d_lidar': gt_boxes[i], 'num_points_in_gt': gt_points.shape[0],
-                               'difficulty': difficulty[i], 'bbox': bbox[i], 'score': annos['score'][i]}
-                    if names[i] in all_db_infos:
-                        all_db_infos[names[i]].append(db_info)
-                    else:
-                        all_db_infos[names[i]] = [db_info]
+                db_path = str(filepath.relative_to(self.root_path))  # gt_database/xxxxx.bin
+                db_info = {'name': names[i], 'path': db_path, 'image_idx': sample_idx, 'gt_idx': i,
+                           'box3d_lidar': gt_boxes[i], 'num_points_in_gt': gt_points.shape[0],
+                           'difficulty': difficulty[i], 'bbox': bbox[i], 'score': score[i]}
+                if names[i] in all_db_infos:
+                    all_db_infos[names[i]].append(db_info)
+                else:
+                    all_db_infos[names[i]] = [db_info]
         for k, v in all_db_infos.items():
             print('Database %s: %d' % (k, len(v)))
 
@@ -265,9 +274,9 @@ class KittiDataset(torch_data.Dataset):
             batch_dict:
                 frame_id:
             pred_dicts: list of pred_dicts
-                pred_boxes: (N, 7), Tensor
-                pred_scores: (N), Tensor
-                pred_labels: (N), Tensor
+                pred_boxes: (M, 7), Tensor
+                pred_scores: (M), Tensor
+                pred_labels: (M), Tensor
             class_names:
             output_path:
 
@@ -355,37 +364,35 @@ class KittiDataset(torch_data.Dataset):
         del d['logger']
         return d
 
-    def include_kitti_data(self):
+    def include_kitti_infos(self):
+        self.kitti_infos = []
+        
         if self.logger is not None:
             self.logger.info('Loading KITTI dataset')
-        kitti_infos = []
 
-        for info_path in self.dataset_cfg.INFO_PATH[self.mode]:
-            info_path = self.root_path / info_path
-            if not info_path.exists():
-                continue
-            with open(info_path, 'rb') as f:
-                infos = pickle.load(f)
-                kitti_infos.extend(infos)
+        info_path = self.root_path / self.info_path
+        with open(info_path, 'rb') as f:
+            infos = pickle.load(f)
 
-        self.kitti_infos.extend(kitti_infos)
+        self.kitti_infos.extend(infos)
 
         if self.logger is not None:
-            self.logger.info('Total samples for KITTI dataset: %d' % (len(kitti_infos)))
+            self.logger.info('Total samples for KITTI dataset: %d' % (len(self.kitti_infos)))
 
     def include_processor(self):
         self.point_cloud_range = np.array(self.dataset_cfg.POINT_CLOUD_RANGE, dtype=np.float32)
-        self.point_feature_encoder = PointFeatureEncoder(
-            self.dataset_cfg.POINT_FEATURE_ENCODING,
-            point_cloud_range=self.point_cloud_range
-        )
+        self.used_feature_list = self.dataset_cfg.USED_FEATURE_LIST
+        self.num_point_features = len(self.used_feature_list)
+        
         self.data_augmentor = DataAugmentor(
             self.root_path, self.dataset_cfg.DATA_AUGMENTOR, self.class_names, logger=self.logger
-        ) if self.training else None
+        ) if self.data_augmentation else None
+        
         self.data_processor = DataProcessor(
             self.dataset_cfg.DATA_PROCESSOR, point_cloud_range=self.point_cloud_range,
-            training=self.training, num_point_features=self.point_feature_encoder.num_point_features
+            training=self.training, num_point_features=self.num_point_features
         )
+        
         self.grid_size = self.data_processor.grid_size
         self.voxel_size = self.data_processor.voxel_size
         self.total_epochs = 0
@@ -398,118 +405,109 @@ class KittiDataset(torch_data.Dataset):
         else:
             self._merge_all_iters_to_one_epoch = False
 
-    def prepare_data(self, data_dict):
-        """
-        Args:
-            data_dict:
-                points: optional, (N, 3 + C_in)
-                gt_boxes: optional, (N, 7 + C) [x, y, z, dx, dy, dz, heading, ...]
-                gt_names: optional, (N), string
-                ...
-
-        Returns:
-            data_dict:
-                frame_id: string
-                points: (N, 3 + C_in)
-                gt_boxes: optional, (N, 7 + C) [x, y, z, dx, dy, dz, heading, ...]
-                gt_names: optional, (N), string
-                use_lead_xyz: bool
-                voxels: optional (num_voxels, max_points_per_voxel, 3 + C)
-                voxel_coords: optional (num_voxels, 3)
-                voxel_num_points: optional (num_voxels)
-                ...
-        """
-        if self.training:
-            assert 'gt_boxes' in data_dict, 'gt_boxes should be provided for training'
-            gt_boxes_mask = np.array([n in self.class_names for n in data_dict['gt_names']], dtype=np.bool_)
-
-            data_dict = self.data_augmentor.forward(
-                data_dict={
-                    **data_dict,
-                    'gt_boxes_mask': gt_boxes_mask
-                }
-            )
-
-        if data_dict.get('gt_boxes', None) is not None:
-            selected = common_utils.keep_arrays_by_name(data_dict['gt_names'], self.class_names)
-            data_dict['gt_boxes'] = data_dict['gt_boxes'][selected]
-            data_dict['gt_names'] = data_dict['gt_names'][selected]
-            gt_classes = np.array([self.class_names.index(n) + 1 for n in data_dict['gt_names']], dtype=np.int32)
-            gt_boxes = np.concatenate((data_dict['gt_boxes'], gt_classes.reshape(-1, 1).astype(np.float32)), axis=1)
-            data_dict['gt_boxes'] = gt_boxes
-
-            if data_dict.get('gt_boxes2d', None) is not None:
-                data_dict['gt_boxes2d'] = data_dict['gt_boxes2d'][selected]
-
-        if data_dict.get('points', None) is not None:
-            data_dict = self.point_feature_encoder.forward(data_dict)
-
-        data_dict = self.data_processor.forward(
-            data_dict=data_dict
-        )
-
-        if self.training and len(data_dict['gt_boxes']) == 0:
-            new_index = np.random.randint(self.__len__())
-            return self.__getitem__(new_index)
-
-        data_dict.pop('gt_names', None)
-
-        return data_dict
-
     def __len__(self):
         if self._merge_all_iters_to_one_epoch:
             return len(self.kitti_infos) * self.total_epochs
         return len(self.kitti_infos)
 
     def __getitem__(self, index):
-        # index = 4
+        """
+        Returns:
+            data_dict:
+                frame_id: int, Sample index
+                gt_boxes: (M', 8), [x, y, z, dx, dy, dz, heading, class_id]
+                points: (N', 4), Points of (x, y, z, intensity)
+                voxels: (num_voxels, max_points_per_voxel, 4)
+                voxel_coords: (num_voxels, 3)
+                voxel_num_points: (num_voxels)
+                image_shape: (2), h * w
+                image: optional, (H, W, 3), RGB Image
+        """
         if self._merge_all_iters_to_one_epoch:
             index = index % len(self.kitti_infos)
-
+        
         info = copy.deepcopy(self.kitti_infos[index])
 
         sample_idx = info['point_cloud']['lidar_idx']
         img_shape = info['image']['image_shape']
         calib = self.get_calib(sample_idx)
-        get_item_list = self.dataset_cfg.get('GET_ITEM_LIST', ['points'])
 
         input_dict = {
             'frame_id': sample_idx,
             'calib': calib,
         }
 
+        get_item_list = self.dataset_cfg.get('GET_ITEM_LIST', ['points'])
         if 'annos' in info:
             annos = info['annos']
-            annos = common_utils.drop_info_with_name(annos, name='DontCare')
-            loc, dims, rots = annos['location'], annos['dimensions'], annos['rotation_y']
-            gt_names = annos['name']
-            gt_boxes_camera = np.concatenate([loc, dims, rots[..., np.newaxis]], axis=1).astype(np.float32)
-            gt_boxes_lidar = box_utils.boxes3d_kitti_camera_to_lidar(gt_boxes_camera, calib)
-
+            annos = common_utils.drop_info_with_name(annos, name='DontCare') # exclude class: DontCare
             input_dict.update({
-                'gt_names': gt_names,
-                'gt_boxes': gt_boxes_lidar
+                'gt_names': annos['name'],
+                'gt_boxes': annos['gt_boxes_lidar'],
+                'road_plane': self.get_road_plane(sample_idx)
             })
-            if "gt_boxes2d" in get_item_list:
-                input_dict['gt_boxes2d'] = annos["bbox"]
-
-            road_plane = self.get_road_plane(sample_idx)
-            if road_plane is not None:
-                input_dict['road_plane'] = road_plane
 
         if "points" in get_item_list:
-            points = self.get_lidar(sample_idx)
+            points = self.get_points(sample_idx)
             if self.dataset_cfg.FOV_POINTS_ONLY:
                 fov_flag = self.get_fov_flag(points, img_shape, calib)
                 points = points[fov_flag]
             input_dict['points'] = points
 
-        if "images" in get_item_list:
-            input_dict['images'] = self.get_image(sample_idx)
+        if "image" in get_item_list:
+            input_dict['image'] = self.get_image(sample_idx)
 
         data_dict = self.prepare_data(data_dict=input_dict)
 
         data_dict['image_shape'] = img_shape
+        return data_dict
+
+    def prepare_data(self, data_dict):
+        """
+        Args:
+            data_dict:
+                frame_id: int, Sample index
+                calib: calibration_kitti.Calibration
+                gt_names: (M), str
+                gt_boxes: (M, 7), [x, y, z, dx, dy, dz, heading]
+                road_plane: (4), float
+                points: (N, 4), Points of (x, y, z, intensity)
+                image: optional, (H, W, 3), RGB Image
+
+        Returns:
+            data_dict:
+                frame_id: int, Sample index
+                gt_boxes: (M', 8), [x, y, z, dx, dy, dz, heading, class_id]
+                points: (N', 4), Points of (x, y, z, intensity)
+                voxels: (num_voxels, max_points_per_voxel, 4)
+                voxel_coords: (num_voxels, 3)
+                voxel_num_points: (num_voxels)
+                image: optional, (H, W, 3), RGB Image
+        """
+        
+        if self.data_augmentor is not None:
+            data_dict = self.data_augmentor.forward(data_dict=data_dict)
+            
+            gt_boxes_mask = np.array([n in self.class_names for n in data_dict['gt_names']], dtype=np.bool)
+            data_dict['gt_boxes'] = data_dict['gt_boxes'][gt_boxes_mask]
+            data_dict['gt_names'] = data_dict['gt_names'][gt_boxes_mask]
+
+        if data_dict.get('gt_boxes', None) is not None:
+            selected = common_utils.keep_arrays_by_name(data_dict['gt_names'], self.class_names) # include class: Car, Pedestrian, Cyclist
+            data_dict['gt_boxes'] = data_dict['gt_boxes'][selected]
+            data_dict['gt_names'] = data_dict['gt_names'][selected]
+            
+            gt_classes = np.array([self.class_names.index(n) + 1 for n in data_dict['gt_names']], dtype=np.int32)
+            gt_boxes = np.concatenate((data_dict['gt_boxes'], gt_classes.reshape(-1, 1).astype(np.float32)), axis=1) # (M, 8)
+            data_dict['gt_boxes'] = gt_boxes
+
+        data_dict = self.data_processor.forward(data_dict=data_dict)
+
+        if self.training and len(data_dict['gt_boxes']) == 0:
+            new_index = np.random.randint(self.__len__())
+            return self.__getitem__(new_index)
+
+        data_dict.pop('gt_names', None)
         return data_dict
 
     @staticmethod
@@ -583,44 +581,31 @@ class KittiDataset(torch_data.Dataset):
 
 
 def create_kitti_infos(dataset_cfg, class_names, workers=4):
-    dataset = KittiDataset(dataset_cfg=dataset_cfg, class_names=class_names, training=False)
-    train_split, val_split = 'train', 'val'
-    
     root_dir = (Path(__file__).resolve().parent / '../').resolve() # ~/pointpillars
-    save_path = root_dir / dataset_cfg.DATA_PATH
-
-    train_filename = save_path / ('kitti_infos_%s.pkl' % train_split)
-    val_filename = save_path / ('kitti_infos_%s.pkl' % val_split)
-    trainval_filename = save_path / 'kitti_infos_trainval.pkl'
-    test_filename = save_path / 'kitti_infos_test.pkl'
+    save_path = root_dir / dataset_cfg.DATA_PATH # ~/pointpillars/data/kitti
 
     print('---------------Start to generate data infos---------------')
-
-    dataset.set_split(train_split)
+    
+    dataset = KittiDataset(dataset_cfg=dataset_cfg, class_names=class_names, training=True,
+        include_kitti_infos=False, include_processor=False)
     kitti_infos_train = dataset.get_infos(num_workers=workers, has_label=True, count_inside_pts=True)
+    train_filename = save_path / dataset_cfg.INFO_PATH['train']
     with open(train_filename, 'wb') as f:
         pickle.dump(kitti_infos_train, f)
     print('Kitti info train file is saved to %s' % train_filename)
-
-    dataset.set_split(val_split)
-    kitti_infos_val = dataset.get_infos(num_workers=workers, has_label=True, count_inside_pts=True)
-    with open(val_filename, 'wb') as f:
-        pickle.dump(kitti_infos_val, f)
-    print('Kitti info val file is saved to %s' % val_filename)
-
-    with open(trainval_filename, 'wb') as f:
-        pickle.dump(kitti_infos_train + kitti_infos_val, f)
-    print('Kitti info trainval file is saved to %s' % trainval_filename)
-
-    dataset.set_split('test')
-    kitti_infos_test = dataset.get_infos(num_workers=workers, has_label=False, count_inside_pts=False)
+    
+    dataset = KittiDataset(dataset_cfg=dataset_cfg, class_names=class_names, training=False,
+        include_kitti_infos=False, include_processor=False)
+    kitti_infos_test = dataset.get_infos(num_workers=workers, has_label=True, count_inside_pts=True)
+    test_filename = save_path / dataset_cfg.INFO_PATH['test']
     with open(test_filename, 'wb') as f:
         pickle.dump(kitti_infos_test, f)
     print('Kitti info test file is saved to %s' % test_filename)
 
     print('---------------Start create groundtruth database for data augmentation---------------')
-    dataset.set_split(train_split)
-    dataset.create_groundtruth_database(train_filename, split=train_split)
+    dataset = KittiDataset(dataset_cfg=dataset_cfg, class_names=class_names, training=True,
+        include_kitti_infos=False, include_processor=False)
+    dataset.create_groundtruth_database()
 
     print('---------------Data preparation Done---------------')
 

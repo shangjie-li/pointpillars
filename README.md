@@ -60,12 +60,16 @@ Implementation of PointPillars in PyTorch for KITTI 3D Object Detetcion
    ```
  - Generate the ground truth database and data infos by running the following command
    ```
-   # This will create gt_database dir & 5 pkl files in pointpillars/data/kitti.
+   # This will create gt_database dir and info files in pointpillars/data/kitti.
    cd pointpillars
    python -m data.kitti_dataset create_kitti_infos data/config.yaml
    ```
  - Display the dataset
    ```
+   # Display the training dataset with data augmentation
+   python dataset_player.py --training --data_augmentation
+   
+   # Display the testing dataset
    python dataset_player.py
    ```
 

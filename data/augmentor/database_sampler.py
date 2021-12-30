@@ -13,28 +13,24 @@ from utils import box_utils, common_utils
 class DataBaseSampler(object):
     def __init__(self, root_path, sampler_cfg, class_names, logger=None):
         self.root_path = root_path
-        self.class_names = class_names
         self.sampler_cfg = sampler_cfg
+        self.class_names = class_names
         self.logger = logger
+        
         self.db_infos = {}
         for class_name in class_names:
             self.db_infos[class_name] = []
         
-        for db_info_path in sampler_cfg.DB_INFO_PATH:
-            db_info_path = self.root_path.resolve() / db_info_path
-            with open(str(db_info_path), 'rb') as f:
-                infos = pickle.load(f)
-                [self.db_infos[cur_class].extend(infos[cur_class]) for cur_class in class_names]
+        db_info_path = self.root_path.resolve() / sampler_cfg.DB_INFO_PATH
+        with open(str(db_info_path), 'rb') as f:
+            infos = pickle.load(f)
+            [self.db_infos[cur_class].extend(infos[cur_class]) for cur_class in class_names]
 
         for func_name, val in sampler_cfg.PREPARE.items():
-            self.db_infos = getattr(self, func_name)(self.db_infos, val)
-
-        self.use_shared_memory = sampler_cfg.get('USE_SHARED_MEMORY', False)
-        self.gt_database_data_key = self.load_db_to_shared_memory() if self.use_shared_memory else None
+            self.db_infos = getattr(self, func_name)(self.db_infos, val) # filter the db_infos
 
         self.sample_groups = {}
         self.sample_class_num = {}
-        self.limit_whole_scene = sampler_cfg.get('LIMIT_WHOLE_SCENE', False)
 
         for x in sampler_cfg.SAMPLE_GROUPS:
             class_name, sample_num = x.split(':')
@@ -54,35 +50,6 @@ class DataBaseSampler(object):
 
     def __setstate__(self, d):
         self.__dict__.update(d)
-
-    def __del__(self):
-        if self.use_shared_memory:
-            self.logger.info('Deleting GT database from shared memory')
-            cur_rank, num_gpus = common_utils.get_dist_info()
-            sa_key = self.sampler_cfg.DB_DATA_PATH[0]
-            if cur_rank % num_gpus == 0 and os.path.exists(f"/dev/shm/{sa_key}"):
-                SharedArray.delete(f"shm://{sa_key}")
-
-            if num_gpus > 1:
-                dist.barrier()
-            self.logger.info('GT database has been removed from shared memory')
-
-    def load_db_to_shared_memory(self):
-        self.logger.info('Loading GT database to shared memory')
-        cur_rank, world_size, num_gpus = common_utils.get_dist_info(return_gpu_per_machine=True)
-
-        assert self.sampler_cfg.DB_DATA_PATH.__len__() == 1, 'Current only support single DB_DATA'
-        db_data_path = self.root_path.resolve() / self.sampler_cfg.DB_DATA_PATH[0]
-        sa_key = self.sampler_cfg.DB_DATA_PATH[0]
-
-        if cur_rank % num_gpus == 0 and not os.path.exists(f"/dev/shm/{sa_key}"):
-            gt_database_data = np.load(db_data_path)
-            common_utils.sa_create(f"shm://{sa_key}", gt_database_data)
-            
-        if num_gpus > 1:
-            dist.barrier()
-        self.logger.info('GT database has been saved to shared memory')
-        return sa_key
 
     def filter_by_difficulty(self, db_infos, removed_difficulty):
         new_db_infos = {}
@@ -114,15 +81,8 @@ class DataBaseSampler(object):
         return db_infos
 
     def sample_with_fixed_number(self, class_name, sample_group):
-        """
-        Args:
-            class_name:
-            sample_group:
-        Returns:
-
-        """
         sample_num, pointer, indices = int(sample_group['sample_num']), sample_group['pointer'], sample_group['indices']
-        if pointer >= len(self.db_infos[class_name]):
+        if pointer + sample_num >= len(self.db_infos[class_name]):
             indices = np.random.permutation(len(self.db_infos[class_name]))
             pointer = 0
 
@@ -134,15 +94,6 @@ class DataBaseSampler(object):
 
     @staticmethod
     def put_boxes_on_road_planes(gt_boxes, road_planes, calib):
-        """
-        Only validate in KITTIDataset
-        Args:
-            gt_boxes: (N, 7 + C) [x, y, z, dx, dy, dz, heading, ...]
-            road_planes: [a, b, c, d]
-            calib:
-
-        Returns:
-        """
         a, b, c, d = road_planes
         center_cam = calib.lidar_to_rect(gt_boxes[:, 0:3])
         cur_height_cam = (-d - a * center_cam[:, 0] - c * center_cam[:, 2]) / b
@@ -153,51 +104,35 @@ class DataBaseSampler(object):
         return gt_boxes, mv_height
 
     def add_sampled_boxes_to_scene(self, data_dict, sampled_gt_boxes, total_valid_sampled_dict):
-        gt_boxes_mask = data_dict['gt_boxes_mask']
-        gt_boxes = data_dict['gt_boxes'][gt_boxes_mask]
-        gt_names = data_dict['gt_names'][gt_boxes_mask]
+        gt_boxes = data_dict['gt_boxes']
+        gt_names = data_dict['gt_names']
         points = data_dict['points']
-        if self.sampler_cfg.get('USE_ROAD_PLANE', False):
-            sampled_gt_boxes, mv_height = self.put_boxes_on_road_planes(
-                sampled_gt_boxes, data_dict['road_plane'], data_dict['calib']
-            )
-            data_dict.pop('calib')
-            data_dict.pop('road_plane')
-
-        obj_points_list = []
-        if self.use_shared_memory:
-            gt_database_data = SharedArray.attach(f"shm://{self.gt_database_data_key}")
-            gt_database_data.setflags(write=0)
-        else:
-            gt_database_data = None 
-
-        for idx, info in enumerate(total_valid_sampled_dict):
-            if self.use_shared_memory:
-                start_offset, end_offset = info['global_data_offset']
-                obj_points = copy.deepcopy(gt_database_data[start_offset:end_offset])
-            else:
-                file_path = self.root_path / info['path']
-                obj_points = np.fromfile(str(file_path), dtype=np.float32).reshape(
-                    [-1, self.sampler_cfg.NUM_POINT_FEATURES])
-
-            obj_points[:, :3] += info['box3d_lidar'][:3]
-
-            if self.sampler_cfg.get('USE_ROAD_PLANE', False):
-                # mv height
-                obj_points[:, 2] -= mv_height[idx]
-
-            obj_points_list.append(obj_points)
-
-        obj_points = np.concatenate(obj_points_list, axis=0)
+        
+        sampled_gt_boxes, mv_height = self.put_boxes_on_road_planes(
+            sampled_gt_boxes, data_dict['road_plane'], data_dict['calib']
+        )
         sampled_gt_names = np.array([x['name'] for x in total_valid_sampled_dict])
-
+        data_dict.pop('calib')
+        data_dict.pop('road_plane')
+        
+        obj_points_list = []
+        for idx, info in enumerate(total_valid_sampled_dict):
+            file_path = self.root_path / info['path']
+            obj_points = np.fromfile(str(file_path), dtype=np.float32).reshape(-1, self.sampler_cfg.NUM_POINT_FEATURES)
+            obj_points[:, :3] += info['box3d_lidar'][:3]
+            obj_points[:, 2] -= mv_height[idx]
+            obj_points_list.append(obj_points)
+        obj_points = np.concatenate(obj_points_list, axis=0)
+        
         large_sampled_gt_boxes = box_utils.enlarge_box3d(
             sampled_gt_boxes[:, 0:7], extra_width=self.sampler_cfg.REMOVE_EXTRA_WIDTH
         )
         points = box_utils.remove_points_in_boxes3d(points, large_sampled_gt_boxes)
         points = np.concatenate([obj_points, points], axis=0)
+        
         gt_names = np.concatenate([gt_names, sampled_gt_names], axis=0)
         gt_boxes = np.concatenate([gt_boxes, sampled_gt_boxes], axis=0)
+        
         data_dict['gt_boxes'] = gt_boxes
         data_dict['gt_names'] = gt_names
         data_dict['points'] = points
@@ -207,9 +142,19 @@ class DataBaseSampler(object):
         """
         Args:
             data_dict:
-                gt_boxes: (N, 7 + C) [x, y, z, dx, dy, dz, heading, ...]
+                calib: calibration_kitti.Calibration
+                gt_names: (M), str
+                gt_boxes: (M, 7), [x, y, z, dx, dy, dz, heading]
+                road_plane: (4), float
+                points: (N, 4), Points of (x, y, z, intensity)
+                ...
 
         Returns:
+            data_dict:
+                gt_names: (M'), str
+                gt_boxes: (M', 7), [x, y, z, dx, dy, dz, heading]
+                points: (N', 4), Points of (x, y, z, intensity)
+                ...
 
         """
         gt_boxes = data_dict['gt_boxes']
@@ -217,16 +162,9 @@ class DataBaseSampler(object):
         existed_boxes = gt_boxes
         total_valid_sampled_dict = []
         for class_name, sample_group in self.sample_groups.items():
-            if self.limit_whole_scene:
-                num_gt = np.sum(class_name == gt_names)
-                sample_group['sample_num'] = str(int(self.sample_class_num[class_name]) - num_gt)
             if int(sample_group['sample_num']) > 0:
                 sampled_dict = self.sample_with_fixed_number(class_name, sample_group)
-
                 sampled_boxes = np.stack([x['box3d_lidar'] for x in sampled_dict], axis=0).astype(np.float32)
-
-                if self.sampler_cfg.get('DATABASE_WITH_FAKELIDAR', False):
-                    sampled_boxes = box_utils.boxes3d_kitti_fakelidar_to_lidar(sampled_boxes)
 
                 iou1 = iou3d_nms_utils.boxes_bev_iou_cpu(sampled_boxes[:, 0:7], existed_boxes[:, 0:7])
                 iou2 = iou3d_nms_utils.boxes_bev_iou_cpu(sampled_boxes[:, 0:7], sampled_boxes[:, 0:7])
@@ -243,5 +181,4 @@ class DataBaseSampler(object):
         if total_valid_sampled_dict.__len__() > 0:
             data_dict = self.add_sampled_boxes_to_scene(data_dict, sampled_gt_boxes, total_valid_sampled_dict)
 
-        data_dict.pop('gt_boxes_mask')
         return data_dict

@@ -230,8 +230,6 @@ def main():
              [ 0.     3.841 -1.419 -1.793  0.   ]]
             frame_id <class 'numpy.ndarray'> (1,)
             [0]
-            use_lead_xyz <class 'numpy.ndarray'> (1,)
-            [ True]
             voxels <class 'numpy.ndarray'> (7260, 32, 4)
             [[[ 2.1554e+01  2.8000e-02  9.3800e-01  3.4000e-01]
               [ 0.0000e+00  0.0000e+00  0.0000e+00  0.0000e+00]

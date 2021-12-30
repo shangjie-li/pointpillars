@@ -65,12 +65,11 @@ class DataProcessor(object):
         self.point_cloud_range = point_cloud_range
         self.training = training
         self.num_point_features = num_point_features
-        self.mode = 'train' if training else 'test'
+        self.mode = 'train' if self.training else 'test'
         self.grid_size = self.voxel_size = None
-        self.data_processor_queue = []
-
         self.voxel_generator = None
 
+        self.data_processor_queue = []
         for cur_cfg in processor_configs:
             cur_processor = getattr(self, cur_cfg.NAME)(config=cur_cfg)
             self.data_processor_queue.append(cur_processor)
@@ -83,7 +82,7 @@ class DataProcessor(object):
             mask = common_utils.mask_points_by_range(data_dict['points'], self.point_cloud_range)
             data_dict['points'] = data_dict['points'][mask]
 
-        if data_dict.get('gt_boxes', None) is not None and config.REMOVE_OUTSIDE_BOXES and self.training:
+        if data_dict.get('gt_boxes', None) is not None and config.REMOVE_OUTSIDE_BOXES:
             mask = box_utils.mask_boxes_outside_range_numpy(
                 data_dict['gt_boxes'], self.point_cloud_range, min_num_corners=config.get('min_num_corners', 1)
             )
@@ -121,11 +120,7 @@ class DataProcessor(object):
             )
 
         points = data_dict['points']
-        voxel_output = self.voxel_generator.generate(points)
-        voxels, coordinates, num_points = voxel_output
-
-        if not data_dict['use_lead_xyz']:
-            voxels = voxels[..., 3:]  # remove xyz in voxels(N, 3)
+        voxels, coordinates, num_points = self.voxel_generator.generate(points)
 
         data_dict['voxels'] = voxels
         data_dict['voxel_coords'] = coordinates
@@ -136,12 +131,18 @@ class DataProcessor(object):
         """
         Args:
             data_dict:
-                points: (N, 3 + C_in)
-                gt_boxes: optional, (N, 7 + C) [x, y, z, dx, dy, dz, heading, ...]
-                gt_names: optional, (N), string
+                gt_boxes: (M, 8), [x, y, z, dx, dy, dz, heading, class_id]
+                points: (N, 4), Points of (x, y, z, intensity)
                 ...
 
         Returns:
+            data_dict:
+                gt_boxes: (M, 8), [x, y, z, dx, dy, dz, heading, class_id]
+                points: (N, 4), Points of (x, y, z, intensity)
+                voxels: (num_voxels, max_points_per_voxel, 4)
+                voxel_coords: (num_voxels, 3)
+                voxel_num_points: (num_voxels)
+                ...
         """
 
         for cur_processor in self.data_processor_queue:

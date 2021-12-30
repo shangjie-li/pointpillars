@@ -13,13 +13,7 @@ class DataAugmentor(object):
         self.logger = logger
 
         self.data_augmentor_queue = []
-        aug_config_list = augmentor_configs if isinstance(augmentor_configs, list) \
-            else augmentor_configs.AUG_CONFIG_LIST
-
-        for cur_cfg in aug_config_list:
-            if not isinstance(augmentor_configs, list):
-                if cur_cfg.NAME in augmentor_configs.DISABLE_AUG_LIST:
-                    continue
+        for cur_cfg in augmentor_configs:
             cur_augmentor = getattr(self, cur_cfg.NAME)(config=cur_cfg)
             self.data_augmentor_queue.append(cur_augmentor)
 
@@ -82,29 +76,26 @@ class DataAugmentor(object):
         """
         Args:
             data_dict:
-                points: (N, 3 + C_in)
-                gt_boxes: optional, (N, 7) [x, y, z, dx, dy, dz, heading]
-                gt_names: optional, (N), string
+                calib: calibration_kitti.Calibration
+                gt_names: (M), str
+                gt_boxes: (M, 7), [x, y, z, dx, dy, dz, heading]
+                road_plane: (4), float
+                points: (N, 4), Points of (x, y, z, intensity)
                 ...
 
         Returns:
+            data_dict:
+                gt_names: (M'), str
+                gt_boxes: (M', 7), [x, y, z, dx, dy, dz, heading]
+                points: (N', 4), Points of (x, y, z, intensity)
+                ...
+
         """
         for cur_augmentor in self.data_augmentor_queue:
             data_dict = cur_augmentor(data_dict=data_dict)
 
         data_dict['gt_boxes'][:, 6] = common_utils.limit_period(
             data_dict['gt_boxes'][:, 6], offset=0.5, period=2 * np.pi
-        )
-        if 'calib' in data_dict:
-            data_dict.pop('calib')
-        if 'road_plane' in data_dict:
-            data_dict.pop('road_plane')
-        if 'gt_boxes_mask' in data_dict:
-            gt_boxes_mask = data_dict['gt_boxes_mask']
-            data_dict['gt_boxes'] = data_dict['gt_boxes'][gt_boxes_mask]
-            data_dict['gt_names'] = data_dict['gt_names'][gt_boxes_mask]
-            if 'gt_boxes2d' in data_dict:
-                data_dict['gt_boxes2d'] = data_dict['gt_boxes2d'][gt_boxes_mask]
-
-            data_dict.pop('gt_boxes_mask')
+        ) # limit heading to [-pi, pi)
+        
         return data_dict
