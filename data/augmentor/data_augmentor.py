@@ -1,15 +1,14 @@
 from functools import partial
 
-import numpy as np
-
 from . import database_sampler
-from utils import common_utils, augmentor_utils
+from utils import augmentor_utils
 
 
 class DataAugmentor(object):
-    def __init__(self, root_path, augmentor_configs, class_names, logger=None):
+    def __init__(self, root_path, augmentor_configs, class_names, num_point_features, logger=None):
         self.root_path = root_path
         self.class_names = class_names
+        self.num_point_features = num_point_features
         self.logger = logger
 
         self.data_augmentor_queue = []
@@ -22,6 +21,7 @@ class DataAugmentor(object):
             root_path=self.root_path,
             sampler_cfg=config,
             class_names=self.class_names,
+            num_point_features=self.num_point_features,
             logger=self.logger
         )
         return db_sampler
@@ -43,7 +43,6 @@ class DataAugmentor(object):
             gt_boxes, points = getattr(augmentor_utils, 'random_flip_along_%s' % cur_axis)(
                 gt_boxes, points,
             )
-
         data_dict['gt_boxes'] = gt_boxes
         data_dict['points'] = points
         return data_dict
@@ -57,7 +56,6 @@ class DataAugmentor(object):
         gt_boxes, points = augmentor_utils.global_rotation(
             data_dict['gt_boxes'], data_dict['points'], rot_range=rot_range
         )
-
         data_dict['gt_boxes'] = gt_boxes
         data_dict['points'] = points
         return data_dict
@@ -78,24 +76,21 @@ class DataAugmentor(object):
             data_dict:
                 calib: calibration_kitti.Calibration
                 gt_names: (M), str
-                gt_boxes: (M, 7), [x, y, z, dx, dy, dz, heading]
-                road_plane: (4), float
+                gt_boxes: (M, 7), [x, y, z, l, w, h, heading] in lidar coordinate system
+                road_plane: (4), [a, b, c, d]
                 points: (N, 4), Points of (x, y, z, intensity)
                 ...
 
         Returns:
             data_dict:
+                calib: calibration_kitti.Calibration
                 gt_names: (M'), str
-                gt_boxes: (M', 7), [x, y, z, dx, dy, dz, heading]
+                gt_boxes: (M', 7), [x, y, z, l, w, h, heading] in lidar coordinate system
+                road_plane: (4), [a, b, c, d]
                 points: (N', 4), Points of (x, y, z, intensity)
                 ...
 
         """
         for cur_augmentor in self.data_augmentor_queue:
             data_dict = cur_augmentor(data_dict=data_dict)
-
-        data_dict['gt_boxes'][:, 6] = common_utils.limit_period(
-            data_dict['gt_boxes'][:, 6], offset=0.5, period=2 * np.pi
-        ) # limit heading to [-pi, pi)
-        
         return data_dict

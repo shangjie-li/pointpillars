@@ -51,7 +51,7 @@ class KittiDataset(torch_data.Dataset):
     def get_points(self, idx):
         """
         Args:
-            idx: int, c
+            idx: str, Sample index
         Returns:
             points: (N, 4), Points of (x, y, z, intensity)
         """
@@ -62,7 +62,7 @@ class KittiDataset(torch_data.Dataset):
     def get_image(self, idx):
         """
         Args:
-            idx: int, Sample index
+            idx: str, Sample index
         Returns:
             image: (H, W, 3), RGB Image
         """
@@ -76,7 +76,7 @@ class KittiDataset(torch_data.Dataset):
     def get_image_shape(self, idx):
         """
         Args:
-            idx: int, Sample index
+            idx: str, Sample index
         Returns:
             image_shape: (2), h * w
         """
@@ -87,7 +87,7 @@ class KittiDataset(torch_data.Dataset):
     def get_label(self, idx):
         """
         Args:
-            idx: int, Sample index
+            idx: str, Sample index
         Returns:
             objects: list, [Object3d, Object3d, ...]
         """
@@ -98,7 +98,7 @@ class KittiDataset(torch_data.Dataset):
     def get_calib(self, idx):
         """
         Args:
-            idx: int, Sample index
+            idx: str, Sample index
         Returns:
             calib: calibration_kitti.Calibration
         """
@@ -109,9 +109,9 @@ class KittiDataset(torch_data.Dataset):
     def get_road_plane(self, idx):
         """
         Args:
-            idx: int, Sample index
+            idx: str, Sample index
         Returns:
-            plane: (4)
+            plane: (4), [a, b, c, d]
         """
         plane_file = self.root_split_path / 'planes' / ('%s.txt' % idx)
         assert plane_file.exists(), 'File not found: %s' % plane_file
@@ -187,8 +187,8 @@ class KittiDataset(torch_data.Dataset):
                 loc_lidar = calib.rect_to_lidar(loc)
                 l, h, w = dims[:, 0:1], dims[:, 1:2], dims[:, 2:3]
                 loc_lidar[:, 2] += h[:, 0] / 2
-                gt_boxes_lidar = np.concatenate([loc_lidar, l, w, h, -(np.pi / 2 + rots[..., np.newaxis])], axis=1) # (M, 7)
-                annotations['gt_boxes_lidar'] = gt_boxes_lidar
+                gt_boxes_lidar = np.concatenate([loc_lidar, l, w, h, -(np.pi / 2 + rots[..., np.newaxis])], axis=1)
+                annotations['gt_boxes_lidar'] = gt_boxes_lidar # (M, 7), [x, y, z, l, w, h, heading] in lidar coordinate system
 
                 info['annos'] = annotations
 
@@ -272,11 +272,17 @@ class KittiDataset(torch_data.Dataset):
         """
         Args:
             batch_dict:
-                frame_id:
-            pred_dicts: list of pred_dicts
-                pred_boxes: (M, 7), Tensor
-                pred_scores: (M), Tensor
-                pred_labels: (M), Tensor
+                frame_id: (batch_size), str, Sample index
+                calib: (batch_size), calibration_kitti.Calibration
+                gt_boxes: (batch_size, M_max, 8), [x, y, z, l, w, h, heading, class_id] in lidar coordinate system
+                points: (N1 + N2 + ..., 5), Points of (batch_id, x, y, z, intensity)
+                voxels: (num_voxels1 + num_voxels2 + ..., max_points_per_voxel, 4), [x, y, z, intensity]
+                voxel_coords: (num_voxels1 + num_voxels2 + ..., 4), Location of voxels, [batch_id, zi, yi, xi]
+                voxel_num_points: (num_voxels1 + num_voxels2 + ...), Number of points in each voxel
+                image_shape: (batch_size, 2), h * w
+                batch_size: int
+                image: optional, (batch_size, H_max, W_max, 3), RGB Image
+            pred_dicts: list, [{pred_boxes: (M, 7), pred_scores: (M), pred_labels: (M)}, {...}, ...]
             class_names:
             output_path:
 
@@ -385,12 +391,11 @@ class KittiDataset(torch_data.Dataset):
         self.num_point_features = len(self.used_feature_list)
         
         self.data_augmentor = DataAugmentor(
-            self.root_path, self.dataset_cfg.DATA_AUGMENTOR, self.class_names, logger=self.logger
+            self.root_path, self.dataset_cfg.DATA_AUGMENTOR, self.class_names, self.num_point_features, logger=self.logger
         ) if self.data_augmentation else None
         
         self.data_processor = DataProcessor(
-            self.dataset_cfg.DATA_PROCESSOR, point_cloud_range=self.point_cloud_range,
-            training=self.training, num_point_features=self.num_point_features
+            self.dataset_cfg.DATA_PROCESSOR, self.point_cloud_range, self.training, self.num_point_features
         )
         
         self.grid_size = self.data_processor.grid_size
@@ -414,12 +419,13 @@ class KittiDataset(torch_data.Dataset):
         """
         Returns:
             data_dict:
-                frame_id: int, Sample index
-                gt_boxes: (M', 8), [x, y, z, dx, dy, dz, heading, class_id]
+                frame_id: str, Sample index
+                calib: calibration_kitti.Calibration
+                gt_boxes: (M', 8), [x, y, z, l, w, h, heading, class_id] in lidar coordinate system
                 points: (N', 4), Points of (x, y, z, intensity)
-                voxels: (num_voxels, max_points_per_voxel, 4)
-                voxel_coords: (num_voxels, 3)
-                voxel_num_points: (num_voxels)
+                voxels: (num_voxels, max_points_per_voxel, 4), [x, y, z, intensity]
+                voxel_coords: (num_voxels, 3), Location of voxels, [zi, yi, xi]
+                voxel_num_points: (num_voxels), Number of points in each voxel
                 image_shape: (2), h * w
                 image: optional, (H, W, 3), RGB Image
         """
@@ -460,46 +466,47 @@ class KittiDataset(torch_data.Dataset):
         data_dict = self.prepare_data(data_dict=input_dict)
 
         data_dict['image_shape'] = img_shape
+        
         return data_dict
 
     def prepare_data(self, data_dict):
         """
         Args:
             data_dict:
-                frame_id: int, Sample index
+                frame_id: str, Sample index
                 calib: calibration_kitti.Calibration
                 gt_names: (M), str
-                gt_boxes: (M, 7), [x, y, z, dx, dy, dz, heading]
-                road_plane: (4), float
+                gt_boxes: (M, 7), [x, y, z, l, w, h, heading] in lidar coordinate system
+                road_plane: (4), [a, b, c, d]
                 points: (N, 4), Points of (x, y, z, intensity)
                 image: optional, (H, W, 3), RGB Image
 
         Returns:
             data_dict:
-                frame_id: int, Sample index
-                gt_boxes: (M', 8), [x, y, z, dx, dy, dz, heading, class_id]
+                frame_id: str, Sample index
+                calib: calibration_kitti.Calibration
+                gt_boxes: (M', 8), [x, y, z, l, w, h, heading, class_id] in lidar coordinate system
                 points: (N', 4), Points of (x, y, z, intensity)
-                voxels: (num_voxels, max_points_per_voxel, 4)
-                voxel_coords: (num_voxels, 3)
-                voxel_num_points: (num_voxels)
+                voxels: (num_voxels, max_points_per_voxel, 4), [x, y, z, intensity]
+                voxel_coords: (num_voxels, 3), Location of voxels, [zi, yi, xi]
+                voxel_num_points: (num_voxels), Number of points in each voxel
                 image: optional, (H, W, 3), RGB Image
         """
         
-        if self.data_augmentor is not None:
-            data_dict = self.data_augmentor.forward(data_dict=data_dict)
-            
-            gt_boxes_mask = np.array([n in self.class_names for n in data_dict['gt_names']], dtype=np.bool)
-            data_dict['gt_boxes'] = data_dict['gt_boxes'][gt_boxes_mask]
-            data_dict['gt_names'] = data_dict['gt_names'][gt_boxes_mask]
+        data_dict = self.data_augmentor.forward(data_dict=data_dict) if self.data_augmentor is not None else data_dict
 
         if data_dict.get('gt_boxes', None) is not None:
-            selected = common_utils.keep_arrays_by_name(data_dict['gt_names'], self.class_names) # include class: Car, Pedestrian, Cyclist
-            data_dict['gt_boxes'] = data_dict['gt_boxes'][selected]
-            data_dict['gt_names'] = data_dict['gt_names'][selected]
+            data_dict['gt_boxes'][:, 6] = common_utils.limit_period(
+                data_dict['gt_boxes'][:, 6], offset=0.5, period=2 * np.pi
+            ) # limit heading to [-pi, pi)
             
-            gt_classes = np.array([self.class_names.index(n) + 1 for n in data_dict['gt_names']], dtype=np.int32)
-            gt_boxes = np.concatenate((data_dict['gt_boxes'], gt_classes.reshape(-1, 1).astype(np.float32)), axis=1) # (M, 8)
-            data_dict['gt_boxes'] = gt_boxes
+            gt_boxes_mask = np.array([n in self.class_names for n in data_dict['gt_names']], dtype=np.bool) # include class: Car, Pedestrian, Cyclist
+            data_dict['gt_boxes'] = data_dict['gt_boxes'][gt_boxes_mask]
+            data_dict['gt_names'] = data_dict['gt_names'][gt_boxes_mask]
+            
+            gt_classes = np.array([self.class_names.index(n) + 1 for n in data_dict['gt_names']], dtype=np.int32) # Car: 1, Pedestrian: 2, Cyclist: 3
+            gt_boxes = np.concatenate((data_dict['gt_boxes'], gt_classes.reshape(-1, 1).astype(np.float32)), axis=1)
+            data_dict['gt_boxes'] = gt_boxes # (M', 8), [x, y, z, l, w, h, heading, class_id] in lidar coordinate system
 
         data_dict = self.data_processor.forward(data_dict=data_dict)
 
@@ -508,10 +515,28 @@ class KittiDataset(torch_data.Dataset):
             return self.__getitem__(new_index)
 
         data_dict.pop('gt_names', None)
+        data_dict.pop('road_plane', None)
         return data_dict
 
     @staticmethod
     def collate_batch(batch_list, _unused=False):
+        """
+        Args:
+            batch_list: list, [data_dict, data_dict, ...]
+        
+        Returns:
+            ret:
+                frame_id: (batch_size), str, Sample index
+                calib: (batch_size), calibration_kitti.Calibration
+                gt_boxes: (batch_size, M_max, 8), [x, y, z, l, w, h, heading, class_id] in lidar coordinate system
+                points: (N1 + N2 + ..., 5), Points of (batch_id, x, y, z, intensity)
+                voxels: (num_voxels1 + num_voxels2 + ..., max_points_per_voxel, 4), [x, y, z, intensity]
+                voxel_coords: (num_voxels1 + num_voxels2 + ..., 4), Location of voxels, [batch_id, zi, yi, xi]
+                voxel_num_points: (num_voxels1 + num_voxels2 + ...), Number of points in each voxel
+                image_shape: (batch_size, 2), h * w
+                batch_size: int
+                image: optional, (batch_size, H_max, W_max, 3), RGB Image
+        """
         data_dict = defaultdict(list)
         for cur_sample in batch_list:
             for key, val in cur_sample.items():
@@ -535,14 +560,6 @@ class KittiDataset(torch_data.Dataset):
                     for k in range(batch_size):
                         batch_gt_boxes3d[k, :val[k].__len__(), :] = val[k]
                     ret[key] = batch_gt_boxes3d
-                elif key in ['gt_boxes2d']:
-                    max_boxes = 0
-                    max_boxes = max([len(x) for x in val])
-                    batch_boxes2d = np.zeros((batch_size, max_boxes, val[0].shape[-1]), dtype=np.float32)
-                    for k in range(batch_size):
-                        if val[k].size > 0:
-                            batch_boxes2d[k, :val[k].__len__(), :] = val[k]
-                    ret[key] = batch_boxes2d
                 elif key in ["images"]:
                     # Get largest image size (H, W)
                     max_h = 0
@@ -556,18 +573,7 @@ class KittiDataset(torch_data.Dataset):
                     for image in val:
                         pad_h = common_utils.get_pad_params(desired_size=max_h, cur_size=image.shape[0])
                         pad_w = common_utils.get_pad_params(desired_size=max_w, cur_size=image.shape[1])
-                        pad_width = (pad_h, pad_w)
-                        # Pad with nan, to be replaced later in the pipeline.
-                        pad_value = np.nan
-
-                        if key == "images":
-                            pad_width = (pad_h, pad_w, (0, 0))
-
-                        image_pad = np.pad(image,
-                                           pad_width=pad_width,
-                                           mode='constant',
-                                           constant_values=pad_value)
-
+                        image_pad = np.pad(image, pad_width=(pad_h, pad_w, (0, 0)), mode='constant', constant_values=0)
                         images.append(image_pad)
                     ret[key] = np.stack(images, axis=0)
                 else:

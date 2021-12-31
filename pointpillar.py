@@ -22,7 +22,7 @@ class PointPillar(nn.Module):
         self.module_topology = [
             'vfe', 'map_to_bev_module', 'backbone_2d', 'dense_head',
         ]
-        self.module_list = self.build_networks()
+        self.module_list = self.build_modules()
 
     @property
     def mode(self):
@@ -31,7 +31,7 @@ class PointPillar(nn.Module):
     def update_global_step(self):
         self.global_step += 1
 
-    def build_networks(self):
+    def build_modules(self):
         model_info_dict = {
             'module_list': [],
             'point_cloud_range': self.dataset.point_cloud_range,
@@ -379,7 +379,7 @@ def load_data_to_gpu(batch_dict):
         elif key in ['frame_id', 'metadata', 'calib']:
             continue
         elif key in ['images']:
-            batch_dict[key] = kornia.image_to_tensor(val).float().cuda().contiguous()
+            batch_dict[key] = torch.from_numpy(val).float().cuda().contiguous()
         elif key in ['image_shape']:
             batch_dict[key] = torch.from_numpy(val).int().cuda()
         else:
