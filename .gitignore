@@ -8,5 +8,5 @@ data/kitti/testing
 data/kitti/*.pkl
 *.pyc
 *.so
-output
+output*
 weights
