@@ -1,3 +1,4 @@
+.idea
 **__pycache__**
 **build**
 **egg-info**
@@ -10,3 +11,4 @@ data/kitti/*.pkl
 *.so
 output*
 weights
+results
